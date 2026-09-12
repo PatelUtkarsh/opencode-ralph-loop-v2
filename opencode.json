@@ -1,28 +1,123 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    "./"
+  ],
   "permissions": [
-    { "action": "skill", "resource": "api-and-interface-design", "effect": "deny" },
-    { "action": "skill", "resource": "browser-testing-with-devtools", "effect": "deny" },
-    { "action": "skill", "resource": "ci-cd-and-automation", "effect": "deny" },
-    { "action": "skill", "resource": "code-review-and-quality", "effect": "deny" },
-    { "action": "skill", "resource": "code-simplification", "effect": "deny" },
-    { "action": "skill", "resource": "context-engineering", "effect": "deny" },
-    { "action": "skill", "resource": "debugging-and-error-recovery", "effect": "deny" },
-    { "action": "skill", "resource": "deprecation-and-migration", "effect": "deny" },
-    { "action": "skill", "resource": "documentation-and-adrs", "effect": "deny" },
-    { "action": "skill", "resource": "doubt-driven-development", "effect": "deny" },
-    { "action": "skill", "resource": "frontend-ui-engineering", "effect": "deny" },
-    { "action": "skill", "resource": "git-workflow-and-versioning", "effect": "deny" },
-    { "action": "skill", "resource": "idea-refine", "effect": "deny" },
-    { "action": "skill", "resource": "incremental-implementation", "effect": "deny" },
-    { "action": "skill", "resource": "interview-me", "effect": "deny" },
-    { "action": "skill", "resource": "performance-optimization", "effect": "deny" },
-    { "action": "skill", "resource": "planning-and-task-breakdown", "effect": "deny" },
-    { "action": "skill", "resource": "security-and-hardening", "effect": "deny" },
-    { "action": "skill", "resource": "shipping-and-launch", "effect": "deny" },
-    { "action": "skill", "resource": "source-driven-development", "effect": "deny" },
-    { "action": "skill", "resource": "spec-driven-development", "effect": "deny" },
-    { "action": "skill", "resource": "test-driven-development", "effect": "deny" },
-    { "action": "skill", "resource": "using-agent-skills", "effect": "deny" }
+    {
+      "action": "skill",
+      "resource": "api-and-interface-design",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "browser-testing-with-devtools",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "ci-cd-and-automation",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "code-review-and-quality",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "code-simplification",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "context-engineering",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "debugging-and-error-recovery",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "deprecation-and-migration",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "documentation-and-adrs",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "doubt-driven-development",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "frontend-ui-engineering",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "git-workflow-and-versioning",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "idea-refine",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "incremental-implementation",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "interview-me",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "performance-optimization",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "planning-and-task-breakdown",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "security-and-hardening",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "shipping-and-launch",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "source-driven-development",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "spec-driven-development",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "test-driven-development",
+      "effect": "deny"
+    },
+    {
+      "action": "skill",
+      "resource": "using-agent-skills",
+      "effect": "deny"
+    }
   ]
 }
