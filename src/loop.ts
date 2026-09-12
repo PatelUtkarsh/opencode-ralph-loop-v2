@@ -123,6 +123,55 @@ async function computeDeltas(
  * `failed`, and `cancelled` as more Stop Reasons land in this switch. */
 type StopReason = "completed" | "max-iterations"
 
+async function stop(context: Context, sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
+  await removeLoopState(context, sessionID)
+  const deltas = await computeDeltas(context, sessionID, state)
+  const text =
+    reason === "completed"
+      ? buildCompletionNotice({ iteration: state.iteration, ...deltas })
+      : buildMaxIterationsNotice({ iteration: state.iteration, maxIterations: state.maxIterations, ...deltas })
+  await context.session.synthetic({ sessionID, text })
+}
+
+/**
+ * Runs the Turn End handling for one Loop Session: continues the Loop with
+ * the next Continuation Prompt, or stops it (completed / max iterations).
+ * Exported so Resume (ticket 06) can call it directly for a Loop Session
+ * that is idle after a service restart, the same way a live Turn End event
+ * does.
+ */
+export async function runTurnEnd(context: Context, sessionID: string): Promise<void> {
+  const state = await readLoopState(context, sessionID)
+  if (state === undefined) return
+
+  const messages = await fetchMessages(context, sessionID)
+
+  if (findCompletion(messages, state.promise)) {
+    await stop(context, sessionID, state, "completed")
+    return
+  }
+
+  if (state.iteration >= state.maxIterations) {
+    await stop(context, sessionID, state, "max-iterations")
+    return
+  }
+
+  const nextIteration = state.iteration + 1
+  const nextState: LoopState = { ...state, iteration: nextIteration, paused: false }
+  await writeLoopState(context, nextState)
+
+  await context.session.prompt({
+    sessionID,
+    text: buildContinuationPrompt({
+      iteration: nextIteration,
+      maxIterations: state.maxIterations,
+      task: state.task,
+      promise: state.promise,
+    }),
+    delivery: "steer",
+  })
+}
+
 /**
  * Starts the Turn End subscription. Call once from `setup`; abort the
  * signal you pass in during cleanup.
@@ -130,61 +179,19 @@ type StopReason = "completed" | "max-iterations"
 export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void {
   const inFlight = new Set<string>()
 
-  async function stop(sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
-    await removeLoopState(context, sessionID)
-    const deltas = await computeDeltas(context, sessionID, state)
-    const text =
-      reason === "completed"
-        ? buildCompletionNotice({ iteration: state.iteration, ...deltas })
-        : buildMaxIterationsNotice({ iteration: state.iteration, maxIterations: state.maxIterations, ...deltas })
-    await context.session.synthetic({ sessionID, text })
-  }
-
-  async function handleTurnEnd(sessionID: string): Promise<void> {
-    if (inFlight.has(sessionID)) return
-    inFlight.add(sessionID)
-    try {
-      const state = await readLoopState(context, sessionID)
-      if (state === undefined) return
-
-      const messages = await fetchMessages(context, sessionID)
-
-      if (findCompletion(messages, state.promise)) {
-        await stop(sessionID, state, "completed")
-        return
-      }
-
-      if (state.iteration >= state.maxIterations) {
-        await stop(sessionID, state, "max-iterations")
-        return
-      }
-
-      const nextIteration = state.iteration + 1
-      const nextState: LoopState = { ...state, iteration: nextIteration, paused: false }
-      await writeLoopState(context, nextState)
-
-      await context.session.prompt({
-        sessionID,
-        text: buildContinuationPrompt({
-          iteration: nextIteration,
-          maxIterations: state.maxIterations,
-          task: state.task,
-          promise: state.promise,
-        }),
-        delivery: "steer",
-      })
-    } finally {
-      inFlight.delete(sessionID)
-    }
-  }
-
   /** Runs a Turn End handler and swallows any rejection: one session's
    * failure must never become an unhandled rejection that could take down
    * the host process, and must never stop other sessions' Loops. */
   function runHandleTurnEnd(sessionID: string): void {
-    handleTurnEnd(sessionID).catch((error: unknown) => {
-      console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
-    })
+    if (inFlight.has(sessionID)) return
+    inFlight.add(sessionID)
+    runTurnEnd(context, sessionID)
+      .catch((error: unknown) => {
+        console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
+      })
+      .finally(() => {
+        inFlight.delete(sessionID)
+      })
   }
 
   void (async () => {
