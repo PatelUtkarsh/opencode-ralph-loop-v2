@@ -1,0 +1,3 @@
+# Plugin entrypoints live at the package root, not only in `package.json` exports
+
+OpenCode 2.0.2 resolves a local plugin directory by trying `<dir>/server`, `<dir>/index`, `<dir>/tui`, and `<dir>/rpc` with `Bun.resolveSync`, ignoring the `exports` map in `package.json`. A directory whose entrypoints sit only under `src/` loads as `undefined` and is silently skipped (no error in the plugin list). We keep thin re-export files `index.ts`, `tui.ts`, and `rpc.ts` at the repo root so both the local-path loader and the published `exports` map resolve. Also observed: a bare `"."` in `plugins` is treated as an npm spec and fails; use `"./"`, `"../name"`, an absolute path, or `file://`.
