@@ -141,13 +141,16 @@ export interface FakeContextOptions {
   /** Seeds the result `ctx.session.get` returns, keyed by sessionID; falls back to the default. */
   readonly sessionGetResult?: Record<string, unknown>
   /** Seeds the result `ctx.session.context` returns; falls back to an empty array. Tests
-   * that need per-call behaviour (e.g. a slow or throwing response) should instead assign
-   * directly to `fake.context.session.context`. */
+   * that need per-call behaviour (e.g. a slow or throwing response) should instead use
+   * `setSessionContext` on the returned `FakeContext`. */
   readonly sessionContextResult?: readonly unknown[]
   /** Caps the number of entries `ctx.storage.scan` returns per call, regardless of the
    * caller's requested `limit`, simulating a backend that enforces its own page size.
    * Use this to test cursor pagination (`next`) across more than one call. */
   readonly storageScanPageSize?: number
+  /** Seeds the result `ctx.permission.list` returns; falls back to an empty array
+   * (no pending permission). */
+  readonly permissionListResult?: readonly unknown[]
 }
 
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
@@ -194,7 +197,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     permission: {
       list: async (input: Record<string, unknown>) => {
         calls.permissionList.push(input)
-        return []
+        return [...(options?.permissionListResult ?? [])]
       },
     },
     rpc: {
