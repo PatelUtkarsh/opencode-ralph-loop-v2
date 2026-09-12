@@ -215,3 +215,94 @@ describe("Turn End: continue or complete", () => {
     if (typeof cleanup === "function") await cleanup()
   })
 })
+
+describe("Turn End: Skipped Idle (ADR-0002)", () => {
+  test("pauses when a permission request is pending", async () => {
+    const fake = createFakeContext({ permissionListResult: [{ id: "perm_1" }] })
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.paused).toBe(true)
+    expect(state.iteration).toBe(1)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("pauses when the last assistant message has an open question tool call", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      {
+        type: "assistant",
+        content: [
+          { type: "text", text: "One moment." },
+          { type: "tool", name: "ask_question", state: { status: "running" } },
+        ],
+      },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.paused).toBe(true)
+    expect(state.iteration).toBe(1)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("pauses when the session inbox has a pending user item", async () => {
+    const fake = createFakeContext({
+      sessionGetResult: { id: SESSION_ID, cost: 0, tokens: { input: 0, output: 0 }, time: { updated: Date.now() } },
+    })
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.paused).toBe(true)
+    expect(state.iteration).toBe(1)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("resumes on the next Turn End once none of the pause causes remain", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState({ paused: true }))
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.paused).toBe(false)
+    expect(state.iteration).toBe(2)
+    expect(fake.calls.sessionPrompt).toHaveLength(1)
+    expect(String(fake.calls.sessionPrompt[0]?.["text"])).toContain("[RALPH LOOP - ITERATION 2/3]")
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+})

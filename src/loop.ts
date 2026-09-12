@@ -10,11 +10,19 @@ type Context = Plugin.Context
 
 /** A single transcript message returned by `ctx.session.context`. Assistant
  * messages carry `content` parts; user and synthetic messages carry `text`
- * directly (see the architecture skill, section 5). */
+ * directly (see the architecture skill, section 5). A `tool` content part
+ * (assumed shape, not confirmed against a live server) additionally carries
+ * an optional `name` and an optional `state.status`, used by the Skipped
+ * Idle question check (ADR-0002). */
 export interface TranscriptMessage {
   readonly type: string
   readonly text?: string
-  readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }>
+  readonly content?: ReadonlyArray<{
+    readonly type: string
+    readonly text?: string
+    readonly name?: string
+    readonly state?: { readonly status?: string }
+  }>
 }
 
 /** Narrows an unknown value to a `TranscriptMessage`. Anything that does not
@@ -32,6 +40,12 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
       const partRecord = part as Record<string, unknown>
       if (typeof partRecord["type"] !== "string") return false
       if (partRecord["text"] !== undefined && typeof partRecord["text"] !== "string") return false
+      if (partRecord["name"] !== undefined && typeof partRecord["name"] !== "string") return false
+      if (partRecord["state"] !== undefined) {
+        if (typeof partRecord["state"] !== "object" || partRecord["state"] === null) return false
+        const state = partRecord["state"] as Record<string, unknown>
+        if (state["status"] !== undefined && typeof state["status"] !== "string") return false
+      }
     }
   }
   return true
@@ -53,6 +67,91 @@ function isSessionCostInfo(value: unknown): value is { cost: number; tokens: Loo
 /** Regex-escapes a string so it can be embedded literally in a `RegExp`. */
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/** Why a Turn End was skipped instead of continuing the Loop (ADR-0002). */
+export type SkippedIdleReason = "permission" | "question" | "inbox"
+
+/** True when the last assistant message contains a question/ask tool call
+ * (name containing "question" or "ask", case-insensitive) that has no
+ * completed result. Assumed shape: `{ type: "tool", name?, state?: { status } }`
+ * (see the architecture skill, section 5, and the docstring on
+ * `TranscriptMessage`); this shape has not been confirmed against a live
+ * server. */
+function hasOpenQuestionToolCall(messages: readonly TranscriptMessage[]): boolean {
+  let lastAssistant: TranscriptMessage | undefined
+  for (const message of messages) {
+    if (message.type === "assistant") lastAssistant = message
+  }
+  if (lastAssistant === undefined) return false
+
+  for (const part of lastAssistant.content ?? []) {
+    if (part.type !== "tool") continue
+    const name = (part.name ?? "").toLowerCase()
+    if (!name.includes("question") && !name.includes("ask")) continue
+    if (part.state?.status !== "completed") return true
+  }
+  return false
+}
+
+/** Narrows an unknown value to the `{ time: { updated, idle? } }` shape
+ * `ctx.session.get` returns. Anything that does not match is treated as
+ * missing rather than trusted. */
+function isSessionTimeInfo(value: unknown): value is { time: { updated: number; idle?: number } } {
+  if (typeof value !== "object" || value === null) return false
+  const time = (value as Record<string, unknown>)["time"]
+  if (typeof time !== "object" || time === null) return false
+  const timeRecord = time as Record<string, unknown>
+  if (typeof timeRecord["updated"] !== "number") return false
+  if (timeRecord["idle"] !== undefined && typeof timeRecord["idle"] !== "number") return false
+  return true
+}
+
+/**
+ * Fallback for a pending inbox item (spec.md step 3). `ctx.session`'s
+ * `SessionDomain` (`node_modules/@opencode/plugin/dist/promise/session.d.ts`)
+ * is `Pick<SessionApi, "create" | "get" | "switchAgent" | "switchModel" |
+ * "prompt" | "generate" | "command" | "synthetic" | "interrupt" | "rename" |
+ * "move" | "wait" | "context">`: no `inbox`. `Plugin.Context` has no other
+ * client handle either (no `context.client`), so there is no way to read
+ * the inbox directly from a plugin. This reads `ctx.session.get` instead
+ * and treats the Turn End as having a pending inbox item when the session's
+ * `time.idle` is still undefined while `time.updated` is newer than `since`
+ * (the last Turn End this module handled for the session, or the Loop's
+ * `startedAt` for the first one). This is a known-weak heuristic, recorded
+ * in the ticket comments: `time.idle` is normally set by the time a
+ * `session.execution.succeeded` event reaches this handler, so this branch
+ * is expected to fire rarely, only in a narrow timing race, not on every
+ * queued message.
+ */
+async function hasPendingInboxItem(context: Context, sessionID: string, since: number): Promise<boolean> {
+  const raw: unknown = await context.session.get({ sessionID })
+  if (!isSessionTimeInfo(raw)) return false
+  if (raw.time.idle !== undefined) return false
+  return raw.time.updated > since
+}
+
+/**
+ * Skipped Idle checks (ADR-0002, spec.md "On Turn End" steps 1-3), run in
+ * order: a pending permission request, an open question/ask tool call in
+ * the last assistant message, then a pending inbox item. Returns the first
+ * reason that hits, or `undefined` when the Turn End should proceed
+ * normally. `since` anchors the inbox fallback (see `hasPendingInboxItem`).
+ */
+export async function detectSkippedIdle(
+  context: Context,
+  sessionID: string,
+  messages: readonly TranscriptMessage[],
+  since: number,
+): Promise<SkippedIdleReason | undefined> {
+  const pendingPermissions: unknown = await context.permission.list({ sessionID })
+  if (Array.isArray(pendingPermissions) && pendingPermissions.length > 0) return "permission"
+
+  if (hasOpenQuestionToolCall(messages)) return "question"
+
+  if (await hasPendingInboxItem(context, sessionID, since)) return "inbox"
+
+  return undefined
 }
 
 /**
@@ -129,9 +228,15 @@ type StopReason = "completed" | "max-iterations"
  */
 export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void {
   const inFlight = new Set<string>()
+  /** The moment this module last finished handling a Turn End for a
+   * session, used as the `since` anchor for the inbox Skipped Idle
+   * fallback (see `hasPendingInboxItem`). Falls back to the Loop's
+   * `startedAt` for a session's first Turn End. */
+  const lastTurnEndAt = new Map<string, number>()
 
   async function stop(sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
     await removeLoopState(context, sessionID)
+    lastTurnEndAt.delete(sessionID)
     const deltas = await computeDeltas(context, sessionID, state)
     const text =
       reason === "completed"
@@ -148,6 +253,14 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
       if (state === undefined) return
 
       const messages = await fetchMessages(context, sessionID)
+      const since = lastTurnEndAt.get(sessionID) ?? Date.parse(state.startedAt)
+
+      const skippedIdleReason = await detectSkippedIdle(context, sessionID, messages, since)
+      if (skippedIdleReason !== undefined) {
+        if (!state.paused) await writeLoopState(context, { ...state, paused: true })
+        lastTurnEndAt.set(sessionID, Date.now())
+        return
+      }
 
       if (findCompletion(messages, state.promise)) {
         await stop(sessionID, state, "completed")
@@ -173,6 +286,8 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
         }),
         delivery: "steer",
       })
+
+      lastTurnEndAt.set(sessionID, Date.now())
     } finally {
       inFlight.delete(sessionID)
     }

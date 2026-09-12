@@ -140,6 +140,9 @@ export interface FakeContextOptions {
    * that need per-call behaviour (e.g. a slow or throwing response) should instead assign
    * directly to `fake.context.session.context`. */
   readonly sessionContextResult?: readonly unknown[]
+  /** Seeds the result `ctx.permission.list` returns; falls back to an empty array
+   * (no pending permission). */
+  readonly permissionListResult?: readonly unknown[]
 }
 
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
@@ -184,7 +187,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     permission: {
       list: async (input: Record<string, unknown>) => {
         calls.permissionList.push(input)
-        return []
+        return [...(options?.permissionListResult ?? [])]
       },
     },
     rpc: {
