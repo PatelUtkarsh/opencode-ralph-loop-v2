@@ -1,0 +1,190 @@
+import { describe, expect, test } from "bun:test"
+import Plugin from "../src/index.ts"
+import type { TranscriptMessage } from "../src/loop.ts"
+import { loopStorageKey, type LoopState } from "../src/state.ts"
+import { createFakeContext } from "./fake-context.ts"
+
+const SESSION_ID = "ses_ralph"
+
+/** Overrides `ctx.session.context` for a test to return a fixed message list. */
+function stubSessionContext(
+  fake: ReturnType<typeof createFakeContext>,
+  handler: (input: Record<string, unknown>) => Promise<TranscriptMessage[]>,
+): void {
+  const session = fake.context.session as unknown as { context: (input: Record<string, unknown>) => Promise<TranscriptMessage[]> }
+  session.context = async (input) => {
+    fake.calls.sessionContext.push(input)
+    return handler(input)
+  }
+}
+
+function baseState(overrides: Partial<LoopState> = {}): LoopState {
+  return {
+    sessionID: SESSION_ID,
+    task: "Build the API",
+    promise: "DONE",
+    iteration: 1,
+    maxIterations: 3,
+    paused: false,
+    startedAt: new Date(0).toISOString(),
+    startCost: 1,
+    startTokens: { input: 10, output: 5 },
+    ...overrides,
+  }
+}
+
+async function tick(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
+describe("Turn End: continue or complete", () => {
+  test("sends the next Continuation Prompt when the Completion Promise is absent", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.iteration).toBe(2)
+    expect(state.paused).toBe(false)
+
+    expect(fake.calls.sessionPrompt).toHaveLength(1)
+    const prompt = fake.calls.sessionPrompt[0]
+    expect(String(prompt?.["text"])).toContain("[RALPH LOOP - ITERATION 2/3]")
+    expect(String(prompt?.["text"])).toContain("Build the API")
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("stops with a completion Notice, removes state, and reports deltas", async () => {
+    const fake = createFakeContext({ sessionGetResult: { id: SESSION_ID, cost: 2.5, tokens: { input: 30, output: 15 } } })
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "<promise>DONE</promise>" }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    expect(fake.storage.has(loopStorageKey(SESSION_ID))).toBe(false)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    const notice = fake.calls.sessionSynthetic.at(-1)
+    expect(notice?.["sessionID"]).toBe(SESSION_ID)
+    expect(String(notice?.["text"])).toMatch(/completed/i)
+    expect(String(notice?.["text"])).toContain("1")
+    expect(String(notice?.["text"])).toContain("1.5")
+    expect(String(notice?.["text"])).toContain("30")
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("stops with a Max Iterations Notice when the cap is reached", async () => {
+    const fake = createFakeContext({ sessionGetResult: { id: SESSION_ID, cost: 5, tokens: { input: 100, output: 50 } } })
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState({ iteration: 3, maxIterations: 3 }))
+    stubSessionContext(fake, async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    expect(fake.storage.has(loopStorageKey(SESSION_ID))).toBe(false)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    const notice = fake.calls.sessionSynthetic.at(-1)
+    expect(String(notice?.["text"])).toMatch(/max iterations/i)
+    expect(String(notice?.["text"])).toContain("3/3")
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("drops a second Turn End for the same session while one is being handled", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+
+    let resolveContext: (() => void) | undefined
+    let callCount = 0
+    stubSessionContext(fake, async () => {
+      callCount += 1
+      await new Promise<void>((resolve) => {
+        resolveContext = resolve
+      })
+      return [
+        { type: "user", text: "Do the thing" },
+        { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+      ]
+    })
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    expect(callCount).toBe(1)
+    resolveContext?.()
+    await tick()
+
+    expect(fake.calls.sessionPrompt).toHaveLength(1)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("ignores an event whose location.directory differs from the plugin's", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({
+      type: "session.execution.succeeded",
+      data: { sessionID: SESSION_ID },
+      location: { directory: "/somewhere/else" },
+    })
+    await tick()
+
+    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    expect(state.iteration).toBe(1)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+    expect(fake.calls.sessionContext).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("ignores session.idle", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.idle", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    expect(fake.calls.sessionContext).toHaveLength(0)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("ignores a session with no Loop in storage", async () => {
+    const fake = createFakeContext()
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: "ses_unrelated" } })
+    await tick()
+
+    expect(fake.calls.sessionContext).toHaveLength(0)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+})

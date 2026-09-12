@@ -1,5 +1,6 @@
 import { Plugin } from "@opencode/plugin"
 import { createStartLoopCommand } from "./commands.ts"
+import { subscribeToTurnEnd } from "./loop.ts"
 
 const DEFAULT_MAX_ITERATIONS = 100
 const DEFAULT_PROMISE = "DONE"
@@ -21,6 +22,11 @@ export default Plugin.define({
       })
     })
 
-    return () => {}
+    const turnEndController = new AbortController()
+    subscribeToTurnEnd(context, turnEndController.signal)
+
+    return () => {
+      turnEndController.abort()
+    }
   },
 })

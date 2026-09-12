@@ -32,3 +32,55 @@ export function buildAlreadyActiveNotice(): string {
 export function buildArgumentErrorNotice(error: string): string {
   return `Ralph Loop could not start: ${error}`
 }
+
+/** Builds the Continuation Prompt sent at each Turn End that does not stop the Loop. */
+export function buildContinuationPrompt(options: {
+  readonly iteration: number
+  readonly maxIterations: number
+  readonly task: string
+  readonly promise: string
+}): string {
+  return [
+    `[RALPH LOOP - ITERATION ${options.iteration}/${options.maxIterations}]`,
+    "The previous turn did not output the Completion Promise.",
+    "",
+    RULES_BLOCK,
+    "",
+    `When the task is complete, output: <promise>${options.promise}</promise>`,
+    "",
+    "Original task:",
+    options.task,
+  ].join("\n")
+}
+
+/** Formats a delta as a signed string, e.g. `+1.50` or `-2`. */
+function formatDelta(value: number): string {
+  const rounded = Math.round(value * 100) / 100
+  return rounded >= 0 ? `+${rounded}` : `${rounded}`
+}
+
+/** Formats the cost/token delta line shared by every stop Notice. */
+function formatDeltaLine(costDelta: number, tokenDelta: number): string {
+  return `Cost delta: ${formatDelta(costDelta)}. Token delta: ${formatDelta(tokenDelta)}.`
+}
+
+/** Notice posted when a Loop stops because the Completion Promise was found. */
+export function buildCompletionNotice(options: { readonly iteration: number; readonly costDelta: number; readonly tokenDelta: number }): string {
+  return [
+    `Ralph Loop completed after ${options.iteration} Iteration${options.iteration === 1 ? "" : "s"}.`,
+    formatDeltaLine(options.costDelta, options.tokenDelta),
+  ].join("\n")
+}
+
+/** Notice posted when a Loop stops because Max Iterations was reached. */
+export function buildMaxIterationsNotice(options: {
+  readonly iteration: number
+  readonly maxIterations: number
+  readonly costDelta: number
+  readonly tokenDelta: number
+}): string {
+  return [
+    `Ralph Loop stopped: reached Max Iterations (${options.iteration}/${options.maxIterations}).`,
+    formatDeltaLine(options.costDelta, options.tokenDelta),
+  ].join("\n")
+}
