@@ -172,26 +172,37 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
   })
 }
 
+/** What `subscribeToTurnEnd` returns: the guarded Turn End handler, so a
+ * caller outside the live event stream (Resume, in `src/resume.ts`) can
+ * route through the same re-entrancy guard instead of calling `runTurnEnd`
+ * directly and risking a race with a live Turn End event for the same
+ * session. */
+export interface TurnEndSubscription {
+  readonly handleTurnEnd: (sessionID: string) => Promise<void>
+}
+
 /**
  * Starts the Turn End subscription. Call once from `setup`; abort the
  * signal you pass in during cleanup.
  */
-export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void {
+export function subscribeToTurnEnd(context: Context, signal: AbortSignal): TurnEndSubscription {
   const inFlight = new Set<string>()
 
   /** Runs a Turn End handler and swallows any rejection: one session's
    * failure must never become an unhandled rejection that could take down
-   * the host process, and must never stop other sessions' Loops. */
-  function runHandleTurnEnd(sessionID: string): void {
+   * the host process, and must never stop other sessions' Loops. Also the
+   * re-entrancy guard: a second call for a session already in flight is a
+   * no-op, whether it comes from a live event or from Resume. */
+  async function handleTurnEnd(sessionID: string): Promise<void> {
     if (inFlight.has(sessionID)) return
     inFlight.add(sessionID)
-    runTurnEnd(context, sessionID)
-      .catch((error: unknown) => {
-        console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
-      })
-      .finally(() => {
-        inFlight.delete(sessionID)
-      })
+    try {
+      await runTurnEnd(context, sessionID)
+    } catch (error) {
+      console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
+    } finally {
+      inFlight.delete(sessionID)
+    }
   }
 
   void (async () => {
@@ -204,11 +215,13 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
         const sessionID = eventSessionID(event)
         if (sessionID === undefined) continue
 
-        runHandleTurnEnd(sessionID)
+        void handleTurnEnd(sessionID)
       }
     } catch (error) {
       if (signal.aborted) return
       console.error("[ralph-loop] Turn End subscription failed", error)
     }
   })()
+
+  return { handleTurnEnd }
 }

@@ -5,13 +5,41 @@ import type { Plugin } from "@opencode/plugin"
 
 type Context = Plugin.Context
 
+/** The page shape `ctx.storage.scan` resolves with, taken from the real
+ * domain type rather than redeclared. */
+type StorageScanPage = Awaited<ReturnType<Context["storage"]["scan"]>>
+
 const LOOP_STORAGE_PREFIX = "loop/"
 
 /** Narrows an unknown value to the `Session.Info` shape needed to decide
  * whether a session is idle. Anything that does not match is treated as
  * "cannot tell", so the caller falls back to leaving the Loop untouched. */
-function isSessionInfo(value: unknown): value is { readonly outcome?: unknown; readonly time?: { readonly updated?: unknown; readonly idle?: unknown } } {
-  return typeof value === "object" && value !== null
+function isSessionInfo(
+  value: unknown,
+): value is { readonly outcome?: unknown; readonly time?: { readonly updated?: unknown; readonly idle?: unknown } | undefined } {
+  if (typeof value !== "object" || value === null) return false
+  const record = value as Record<string, unknown>
+  const time = record["time"]
+  return time === undefined || (typeof time === "object" && time !== null)
+}
+
+/**
+ * Determines whether a thrown `ctx.session.get` error means the session no
+ * longer exists, as opposed to a transient failure (network error, timeout,
+ * unrelated server error). Only a not-found error should discard the Loop;
+ * anything else must leave the storage key alone so a temporary blip does
+ * not silently drop a Loop. Checks, in order: an effect-style `_tag` of
+ * `SessionNotFoundError`, an HTTP-style `status` of 404, or a `name`/`message`
+ * containing "not found" (case-insensitive).
+ */
+function isSessionNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false
+  const record = error as Record<string, unknown>
+  if (record["_tag"] === "SessionNotFoundError") return true
+  if (record["status"] === 404) return true
+  const name = typeof record["name"] === "string" ? record["name"] : ""
+  const message = typeof record["message"] === "string" ? record["message"] : ""
+  return /not found/i.test(name) || /not found/i.test(message)
 }
 
 /**
@@ -43,8 +71,8 @@ function isSessionIdle(info: unknown): boolean {
 export async function resumeLoops(context: Context, onTurnEnd: (sessionID: string) => Promise<void>): Promise<void> {
   let cursor: string | undefined = undefined
 
-  do {
-    let page: { entries: ReadonlyArray<{ readonly key: string; readonly value: unknown }>; readonly next?: string }
+  for (;;) {
+    let page: StorageScanPage
     try {
       page = await context.storage.scan({ prefix: LOOP_STORAGE_PREFIX, after: cursor })
     } catch (error) {
@@ -58,8 +86,12 @@ export async function resumeLoops(context: Context, onTurnEnd: (sessionID: strin
         let info: unknown
         try {
           info = await context.session.get({ sessionID })
-        } catch {
-          await context.storage.remove(entry.key)
+        } catch (error) {
+          if (isSessionNotFound(error)) {
+            await context.storage.remove(entry.key)
+          } else {
+            console.error(`[ralph-loop] Resume could not read session ${sessionID}; leaving the Loop in place`, error)
+          }
           continue
         }
 
@@ -71,6 +103,10 @@ export async function resumeLoops(context: Context, onTurnEnd: (sessionID: strin
       }
     }
 
+    // Stop when the backend signals no more pages, or when it repeats the
+    // same cursor (would otherwise loop forever), or when a page came back
+    // empty (nothing left to page through).
+    if (page.next === undefined || page.next === cursor || page.entries.length === 0) break
     cursor = page.next
-  } while (cursor !== undefined)
+  }
 }

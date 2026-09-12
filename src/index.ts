@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin"
 import { createStartLoopCommand } from "./commands.ts"
-import { runTurnEnd, subscribeToTurnEnd } from "./loop.ts"
+import { subscribeToTurnEnd } from "./loop.ts"
 import { resumeLoops } from "./resume.ts"
 
 const DEFAULT_MAX_ITERATIONS = 100
@@ -24,9 +24,12 @@ export default Plugin.define({
     })
 
     const turnEndController = new AbortController()
-    subscribeToTurnEnd(context, turnEndController.signal)
+    const { handleTurnEnd } = subscribeToTurnEnd(context, turnEndController.signal)
 
-    await resumeLoops(context, (sessionID) => runTurnEnd(context, sessionID))
+    // Resume never throws (see src/resume.ts), so this is fire-and-forget:
+    // setup does not need to wait for every Loop Session to be resumed
+    // before it returns.
+    void resumeLoops(context, handleTurnEnd)
 
     return () => {
       turnEndController.abort()
