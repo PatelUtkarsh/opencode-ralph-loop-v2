@@ -1,0 +1,3 @@
+# The TUI Indicator reads Loop Status over plugin RPC, not shared storage
+
+The server plugin owns Loop state in `ctx.storage`, which the TUI process cannot read. Instead of duplicating state into the TUI's own storage or polling the session transcript for Notices, the server plugin publishes a small RPC (`status` method plus a `changed` event) and the TUI plugin renders the Indicator from that. This keeps one source of truth and lets any other client (web, ACP) read the same status. The cost is a second entrypoint (`./tui`) and OpenTUI peer dependencies, which the core loop does not otherwise need.

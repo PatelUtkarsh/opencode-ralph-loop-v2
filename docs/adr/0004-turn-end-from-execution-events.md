@@ -1,0 +1,3 @@
+# Turn End is detected from `session.execution.*` events, not `session.idle`
+
+The V1 plugin and the OpenCode docs example both key on `session.idle`. A probe against OpenCode 2.0.2 showed that the public event stream delivers `session.execution.started`, `session.execution.succeeded`, `session.execution.failed`, and `session.execution.interrupted` for a session turn, and never `session.idle`, even though the schema defines it. We key the Loop on `session.execution.succeeded` for a normal Turn End and on `.failed` / `.interrupted` as Stop Reasons. If a future release starts emitting `session.idle`, the plugin should ignore it to avoid double-firing.
