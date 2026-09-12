@@ -4,9 +4,12 @@ import { parseLoopArgs, type LoopArgDefaults } from "./args.ts"
 import {
   buildAlreadyActiveNotice,
   buildArgumentErrorNotice,
+  buildNoActiveLoopNotice,
   buildStartNotice,
   buildStartPrompt,
+  buildStatusNotice,
 } from "./prompts.ts"
+import { stopLoop } from "./loop.ts"
 import { readLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
 
 type Context = Plugin.Context
@@ -59,6 +62,47 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
       sessionID,
       text: buildStartPrompt(task, promise),
       delivery,
+    })
+  }
+}
+
+/** Builds the `cancel-ralph` command executor: stops an active Loop with
+ * reason `cancelled`, or posts a "no active Loop" Notice. */
+export function createCancelLoopCommand(context: Context) {
+  return async function execute(input: RalphCommandInput): Promise<void> {
+    const { sessionID } = input
+
+    const state = await readLoopState(context, sessionID)
+    if (state === undefined) {
+      await context.session.synthetic({ sessionID, text: buildNoActiveLoopNotice() })
+      return
+    }
+
+    await stopLoop(context, sessionID, state, "cancelled")
+  }
+}
+
+/** Builds the `ralph-status` command executor: posts a Notice with the
+ * Loop's Iteration, Max Iterations, paused flag, and Task, or a "no active
+ * Loop" Notice. */
+export function createStatusCommand(context: Context) {
+  return async function execute(input: RalphCommandInput): Promise<void> {
+    const { sessionID } = input
+
+    const state = await readLoopState(context, sessionID)
+    if (state === undefined) {
+      await context.session.synthetic({ sessionID, text: buildNoActiveLoopNotice() })
+      return
+    }
+
+    await context.session.synthetic({
+      sessionID,
+      text: buildStatusNotice({
+        iteration: state.iteration,
+        maxIterations: state.maxIterations,
+        paused: state.paused,
+        task: state.task,
+      }),
     })
   }
 }

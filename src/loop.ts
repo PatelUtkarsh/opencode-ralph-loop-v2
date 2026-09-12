@@ -3,7 +3,7 @@
 // detection" and "On Turn End", and ADR-0004 (session.execution.succeeded,
 // never session.idle).
 import type { Plugin } from "@opencode/plugin"
-import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice } from "./prompts.ts"
+import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
 import { readLoopState, removeLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
 
 type Context = Plugin.Context
@@ -119,25 +119,40 @@ async function computeDeltas(
   return { costDelta, tokenDelta }
 }
 
-/** Why a Turn End stopped the Loop. Ticket 05 will add `interrupted`,
- * `failed`, and `cancelled` as more Stop Reasons land in this switch. */
-type StopReason = "completed" | "max-iterations"
+/** Why a Turn End stopped the Loop (spec.md "Stop Reason"). */
+export type StopReason = "completed" | "max-iterations" | "cancelled" | "interrupted" | "failed"
+
+/**
+ * Stops a Loop for any Stop Reason: removes state and posts a Notice.
+ * `completed` and `max-iterations` report cost/token deltas; the rest
+ * report only the Iteration reached. Exported so `src/commands.ts` can
+ * stop a Loop from `cancel-ralph`.
+ */
+export async function stopLoop(context: Context, sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
+  await removeLoopState(context, sessionID)
+  let text: string
+  if (reason === "completed" || reason === "max-iterations") {
+    const deltas = await computeDeltas(context, sessionID, state)
+    text =
+      reason === "completed"
+        ? buildCompletionNotice({ iteration: state.iteration, ...deltas })
+        : buildMaxIterationsNotice({ iteration: state.iteration, maxIterations: state.maxIterations, ...deltas })
+  } else {
+    text = buildStoppedNotice(reason, state.iteration)
+  }
+  await context.session.synthetic({ sessionID, text })
+}
 
 /**
  * Starts the Turn End subscription. Call once from `setup`; abort the
  * signal you pass in during cleanup.
  */
-export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void {
+export function subscribeToTurnEnd(context: Context, signal: AbortSignal, options?: { readonly stopOnFailure?: boolean }): void {
   const inFlight = new Set<string>()
+  const stopOnFailure = options?.stopOnFailure ?? true
 
   async function stop(sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
-    await removeLoopState(context, sessionID)
-    const deltas = await computeDeltas(context, sessionID, state)
-    const text =
-      reason === "completed"
-        ? buildCompletionNotice({ iteration: state.iteration, ...deltas })
-        : buildMaxIterationsNotice({ iteration: state.iteration, maxIterations: state.maxIterations, ...deltas })
-    await context.session.synthetic({ sessionID, text })
+    await stopLoop(context, sessionID, state, reason)
   }
 
   async function handleTurnEnd(sessionID: string): Promise<void> {
@@ -178,26 +193,49 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
     }
   }
 
-  /** Runs a Turn End handler and swallows any rejection: one session's
-   * failure must never become an unhandled rejection that could take down
-   * the host process, and must never stop other sessions' Loops. */
+  /** Stops a Loop Session for `interrupted` or `failed`, ignoring sessions
+   * with no Loop in storage. */
+  async function handleStopEvent(sessionID: string, reason: "interrupted" | "failed"): Promise<void> {
+    const state = await readLoopState(context, sessionID)
+    if (state === undefined) return
+    await stop(sessionID, state, reason)
+  }
+
+  /** Runs a handler and swallows any rejection: one session's failure must
+   * never become an unhandled rejection that could take down the host
+   * process, and must never stop other sessions' Loops. */
   function runHandleTurnEnd(sessionID: string): void {
     handleTurnEnd(sessionID).catch((error: unknown) => {
       console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
     })
   }
 
+  function runHandleStopEvent(sessionID: string, reason: "interrupted" | "failed"): void {
+    handleStopEvent(sessionID, reason).catch((error: unknown) => {
+      console.error(`[ralph-loop] ${reason} handling failed for session ${sessionID}`, error)
+    })
+  }
+
   void (async () => {
     try {
       for await (const event of context.event.subscribe({ signal })) {
-        if (event.type !== TURN_END_EVENT_TYPE) continue
-
         if (event.location?.directory !== undefined && event.location.directory !== context.location.directory) continue
 
         const sessionID = eventSessionID(event)
         if (sessionID === undefined) continue
 
-        runHandleTurnEnd(sessionID)
+        if (event.type === TURN_END_EVENT_TYPE) {
+          runHandleTurnEnd(sessionID)
+        } else if (event.type === "session.execution.interrupted") {
+          runHandleStopEvent(sessionID, "interrupted")
+        } else if (event.type === "session.execution.failed") {
+          if (stopOnFailure) runHandleStopEvent(sessionID, "failed")
+          else runHandleTurnEnd(sessionID)
+        } else if (event.type === "session.deleted") {
+          removeLoopState(context, sessionID).catch((error: unknown) => {
+            console.error(`[ralph-loop] removing state for deleted session ${sessionID} failed`, error)
+          })
+        }
       }
     } catch (error) {
       if (signal.aborted) return

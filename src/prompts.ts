@@ -84,3 +84,30 @@ export function buildMaxIterationsNotice(options: {
     formatDeltaLine(options.costDelta, options.tokenDelta),
   ].join("\n")
 }
+
+/** The remaining Stop Reasons: cancelled, interrupted, failed. These report
+ * the Iteration reached and no cost/token deltas (spec.md "Stop"). */
+export type StoppedReason = "cancelled" | "interrupted" | "failed"
+
+/** Notice posted when a Loop stops for `cancelled`, `interrupted`, or `failed`. */
+export function buildStoppedNotice(reason: StoppedReason, iteration: number): string {
+  return `Ralph Loop ${reason} after ${iteration} Iteration${iteration === 1 ? "" : "s"}.`
+}
+
+/** Notice posted by `/ralph-status` when a Loop is active. */
+export function buildStatusNotice(options: {
+  readonly iteration: number
+  readonly maxIterations: number
+  readonly paused: boolean
+  readonly task: string
+}): string {
+  return [
+    `Ralph Loop status: Iteration ${options.iteration}/${options.maxIterations}${options.paused ? " (paused)" : ""}.`,
+    `Task: ${options.task}`,
+  ].join("\n")
+}
+
+/** Notice posted by `/cancel-ralph` and `/ralph-status` when the session has no Loop. */
+export function buildNoActiveLoopNotice(): string {
+  return "No active Ralph Loop in this session."
+}
