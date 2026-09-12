@@ -1,5 +1,5 @@
 // Prompt and Notice text builders. See spec.md "Start Prompt" and "Continuation Prompt".
-import type { StopReason } from "./loop.ts"
+import type { StopReason } from "./rpc.ts"
 
 /** The Rules block repeated in every Start Prompt and Continuation Prompt. */
 export const RULES_BLOCK = [

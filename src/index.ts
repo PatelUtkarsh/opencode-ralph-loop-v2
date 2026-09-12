@@ -1,11 +1,15 @@
 import { Plugin } from "@opencode/plugin"
 import { createCancelLoopCommand, createStartLoopCommand, createStatusCommand } from "./commands.ts"
 import { subscribeToTurnEnd } from "./loop.ts"
+import { RalphRpc } from "./rpc.ts"
 import { resumeLoops } from "./resume.ts"
+import { readLoopState } from "./state.ts"
+import { setStatusEmitter, toLoopStatus } from "./status.ts"
 
 const DEFAULT_MAX_ITERATIONS = 100
 const DEFAULT_PROMISE = "DONE"
 const DEFAULT_STOP_ON_FAILURE = true
+const DEFAULT_NOTIFY = true
 
 export default Plugin.define({
   id: "ralph-loop",
@@ -17,6 +21,20 @@ export default Plugin.define({
     }
     const stopOnFailure =
       typeof context.options["stopOnFailure"] === "boolean" ? context.options["stopOnFailure"] : DEFAULT_STOP_ON_FAILURE
+    const notify = typeof context.options["notify"] === "boolean" ? context.options["notify"] : DEFAULT_NOTIFY
+
+    // RPC (ADR-0003): `status` reads storage directly; `changed` is emitted
+    // by src/loop.ts and src/commands.ts through the setStatusEmitter seam
+    // in src/status.ts, so those modules never need a reference to this
+    // registration.
+    const rpcRegistration = await context.rpc.register(RalphRpc, {
+      status: async (input) => {
+        const { sessionID } = input as { sessionID: string }
+        const state = await readLoopState(context, sessionID)
+        return { status: state === undefined ? undefined : toLoopStatus(state), notify }
+      },
+    })
+    setStatusEmitter((data) => rpcRegistration.events.emit("changed", data))
 
     await context.command.transform((editor) => {
       editor.add({
@@ -44,8 +62,10 @@ export default Plugin.define({
     // before it returns.
     void resumeLoops(context, handleTurnEnd)
 
-    return () => {
+    return async () => {
       turnEndController.abort()
+      setStatusEmitter(undefined)
+      await rpcRegistration.dispose()
     }
   },
 })

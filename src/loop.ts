@@ -5,6 +5,8 @@
 // ADR-0004 (session.execution.succeeded, never session.idle).
 import type { Plugin } from "@opencode/plugin"
 import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
+import type { StopReason } from "./rpc.ts"
+import { emitChanged } from "./status.ts"
 import { readLoopState, removeLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
 
 type Context = Plugin.Context
@@ -230,18 +232,17 @@ async function computeDeltas(
  * with the subscription. */
 const pendingInbox = new Map<string, Set<string>>()
 
-/** Why a Turn End stopped the Loop (spec.md "Stop Reason"). */
-export type StopReason = "completed" | "max-iterations" | "cancelled" | "interrupted" | "failed"
-
 /**
  * Stops a Loop for any Stop Reason: removes state and posts a Notice.
  * `completed` and `max-iterations` report cost/token deltas; the rest
  * report only the Iteration reached. Exported so `src/commands.ts` can
- * stop a Loop from `cancel-ralph`.
+ * stop a Loop from `cancel-ralph`. Emits RPC `changed` with `status:
+ * undefined` and the Stop Reason (ADR-0003).
  */
 export async function stopLoop(context: Context, sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
   await removeLoopState(context, sessionID)
   pendingInbox.delete(sessionID)
+  emitChanged(sessionID, undefined, reason)
   let text: string
   if (reason === "completed" || reason === "max-iterations") {
     const deltas = await computeDeltas(context, sessionID, state)
@@ -274,7 +275,9 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
     // fetchMessages or permission.list. Do not resurrect it as a paused zombie.
     const stillActive = await readLoopState(context, sessionID)
     if (stillActive === undefined) return
-    await writeLoopState(context, { ...stillActive, paused: true })
+    const pausedState = { ...stillActive, paused: true }
+    await writeLoopState(context, pausedState)
+    emitChanged(sessionID, pausedState)
     return
   }
 
@@ -299,6 +302,7 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
   const nextIteration = stillActive.iteration + 1
   const nextState: LoopState = { ...stillActive, iteration: nextIteration, paused: false }
   await writeLoopState(context, nextState)
+  emitChanged(sessionID, nextState)
 
   await context.session.prompt({
     sessionID,

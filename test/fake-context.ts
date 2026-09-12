@@ -50,6 +50,10 @@ export interface FakeContextCalls {
   readonly storageSet: Array<{ key: string; value: unknown }>
   readonly storageRemove: string[]
   readonly storageScan: Array<{ prefix: string; after?: string; limit?: number }>
+  /** Every `events.emit(name, data)` call made on an `rpc.register` result,
+   * across every registration. `data` is recorded as given; the RPC layer
+   * requires it to be an object (see the RPC docs), never a scalar. */
+  readonly rpcEmit: Array<{ name: string; data: Record<string, unknown> }>
 }
 
 export interface FakeContext {
@@ -165,6 +169,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     storageSet: [],
     storageRemove: [],
     storageScan: [],
+    rpcEmit: [],
   }
   const commands = new Map<string, FakeCommandDefinition>()
   const rpcRegistrations: FakeRpcRegistration[] = []
@@ -203,7 +208,14 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     rpc: {
       register: async (definition: unknown, handlers: Record<string, (input: unknown, context: { signal: AbortSignal }) => Promise<unknown>>) => {
         rpcRegistrations.push({ definition, handlers })
-        return { dispose: async () => {}, events: { emit: async () => {} } }
+        return {
+          dispose: async () => {},
+          events: {
+            emit: async (name: string, data: Record<string, unknown>) => {
+              calls.rpcEmit.push({ name, data })
+            },
+          },
+        }
       },
     },
     session: {

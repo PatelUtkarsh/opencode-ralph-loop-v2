@@ -10,6 +10,7 @@ import {
   buildStatusNotice,
 } from "./prompts.ts"
 import { isSessionCostInfo, stopLoop } from "./loop.ts"
+import { emitChanged } from "./status.ts"
 import { readLoopState, writeLoopState, type LoopState } from "./state.ts"
 
 type Context = Plugin.Context
@@ -53,6 +54,7 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
       startTokens: info.tokens,
     }
     await writeLoopState(context, state)
+    emitChanged(sessionID, state)
 
     await context.session.synthetic({
       sessionID,
