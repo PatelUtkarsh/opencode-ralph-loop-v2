@@ -394,3 +394,43 @@ describe("Turn End: Skipped Idle (ADR-0002)", () => {
     if (typeof cleanup === "function") await cleanup()
   })
 })
+
+describe("Turn End: Skipped Idle vs concurrent stop", () => {
+  test("a cancel that lands during the Skipped Idle check does not resurrect the Loop as paused", async () => {
+    const fake = createFakeContext({ permissionListResult: [{ id: "perm_1" }] })
+    await Plugin.setup(fake.context)
+    const sessionID = "ses_race_pause"
+    fake.storage.set(`loop/${sessionID}`, {
+      sessionID,
+      task: "Do it",
+      promise: "DONE",
+      iteration: 1,
+      maxIterations: 10,
+      paused: false,
+      startedAt: 0,
+      startCost: 0,
+      startTokens: { input: 0, output: 0 },
+    })
+
+    let release: (() => void) | undefined
+    fake.setSessionContext(
+      () =>
+        new Promise<unknown[]>((resolve) => {
+          release = () => resolve([])
+        }),
+    )
+
+    fake.push({ type: "session.execution.succeeded", data: { sessionID } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    await fake.commands.get("cancel-ralph")!.execute({ sessionID, prompt: { text: "" }, delivery: "steer" })
+    expect(fake.storage.has(`loop/${sessionID}`)).toBe(false)
+
+    release?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fake.storage.has(`loop/${sessionID}`)).toBe(false)
+    expect(fake.calls.sessionPrompt.length).toBe(0)
+  })
+})

@@ -1,7 +1,7 @@
-// Turn End handling and the remaining Stop Reasons. Continues a Loop with
-// the next Continuation Prompt, or stops it (completed, max-iterations,
-// cancelled, interrupted, failed, or session.deleted) with the matching
-// Notice. See spec.md "Turn End detection", "On Turn End", and "Stop", and
+// Turn End handling and the Stop Reasons. Pauses a Loop on a Skipped Idle,
+// continues it with the next Continuation Prompt, or stops it (completed,
+// max-iterations, cancelled, interrupted, failed) with the matching Notice.
+// A deleted session drops its Loop state silently. See spec.md "Turn End detection", "On Turn End", and "Stop", and
 // ADR-0004 (session.execution.succeeded, never session.idle).
 import type { Plugin } from "@opencode/plugin"
 import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
@@ -269,7 +269,12 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
 
   const skippedIdleReason = await detectSkippedIdle(context, sessionID, messages, pendingInbox.get(sessionID))
   if (skippedIdleReason !== undefined) {
-    if (!state.paused) await writeLoopState(context, { ...state, paused: true })
+    if (state.paused) return
+    // Same race as below: a stop may have removed the Loop while we awaited
+    // fetchMessages or permission.list. Do not resurrect it as a paused zombie.
+    const stillActive = await readLoopState(context, sessionID)
+    if (stillActive === undefined) return
+    await writeLoopState(context, { ...stillActive, paused: true })
     return
   }
 
