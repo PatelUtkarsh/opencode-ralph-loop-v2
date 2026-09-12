@@ -11,11 +11,7 @@ function stubSessionContext(
   fake: ReturnType<typeof createFakeContext>,
   handler: (input: Record<string, unknown>) => Promise<TranscriptMessage[]>,
 ): void {
-  const session = fake.context.session as unknown as { context: (input: Record<string, unknown>) => Promise<TranscriptMessage[]> }
-  session.context = async (input) => {
-    fake.calls.sessionContext.push(input)
-    return handler(input)
-  }
+  fake.setSessionContext(handler)
 }
 
 function baseState(overrides: Partial<LoopState> = {}): LoopState {
@@ -80,9 +76,9 @@ describe("Turn End: continue or complete", () => {
     const notice = fake.calls.sessionSynthetic.at(-1)
     expect(notice?.["sessionID"]).toBe(SESSION_ID)
     expect(String(notice?.["text"])).toMatch(/completed/i)
-    expect(String(notice?.["text"])).toContain("1")
-    expect(String(notice?.["text"])).toContain("1.5")
-    expect(String(notice?.["text"])).toContain("30")
+    expect(String(notice?.["text"])).toContain("after 1 Iteration")
+    expect(String(notice?.["text"])).toContain("Cost delta: +1.5")
+    expect(String(notice?.["text"])).toContain("Token delta: +30")
 
     if (typeof cleanup === "function") await cleanup()
   })
@@ -105,6 +101,8 @@ describe("Turn End: continue or complete", () => {
     const notice = fake.calls.sessionSynthetic.at(-1)
     expect(String(notice?.["text"])).toMatch(/max iterations/i)
     expect(String(notice?.["text"])).toContain("3/3")
+    expect(String(notice?.["text"])).toContain("Cost delta: +4")
+    expect(String(notice?.["text"])).toContain("Token delta: +135")
 
     if (typeof cleanup === "function") await cleanup()
   })
@@ -184,6 +182,35 @@ describe("Turn End: continue or complete", () => {
 
     expect(fake.calls.sessionContext).toHaveLength(0)
     expect(fake.calls.sessionPrompt).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("a thrown error handling one session's Turn End does not stop another session's Loop", async () => {
+    const fake = createFakeContext()
+    const failingSessionID = "ses_failing"
+    fake.storage.set(loopStorageKey(failingSessionID), baseState({ sessionID: failingSessionID }))
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+
+    stubSessionContext(fake, async (input) => {
+      if (input["sessionID"] === failingSessionID) throw new Error("boom")
+      return [
+        { type: "user", text: "Do the thing" },
+        { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+      ]
+    })
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: failingSessionID } })
+    await tick()
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    expect(fake.calls.sessionPrompt).toHaveLength(1)
+    expect(fake.calls.sessionPrompt[0]?.["sessionID"]).toBe(SESSION_ID)
+
+    const failingState = fake.storage.get(loopStorageKey(failingSessionID)) as LoopState
+    expect(failingState.iteration).toBe(1)
 
     if (typeof cleanup === "function") await cleanup()
   })

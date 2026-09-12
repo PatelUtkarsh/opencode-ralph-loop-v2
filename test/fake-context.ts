@@ -65,6 +65,10 @@ export interface FakeContext {
   readonly storage: Map<string, unknown>
   /** Pushes an event to every active `ctx.event.subscribe` iterator. */
   push(event: FakeEvent): void
+  /** Overrides `ctx.session.context` for a test. Use this for behaviour the
+   * static `sessionContextResult` seed cannot express, e.g. a response that
+   * varies per call, is delayed, or throws. */
+  setSessionContext(handler: (input: Record<string, unknown>) => Promise<unknown[]>): void
 }
 
 interface PendingPull {
@@ -132,6 +136,10 @@ export interface FakeContextOptions {
   readonly options?: Record<string, unknown>
   /** Seeds the result `ctx.session.get` returns, keyed by sessionID; falls back to the default. */
   readonly sessionGetResult?: Record<string, unknown>
+  /** Seeds the result `ctx.session.context` returns; falls back to an empty array. Tests
+   * that need per-call behaviour (e.g. a slow or throwing response) should instead assign
+   * directly to `fake.context.session.context`. */
+  readonly sessionContextResult?: readonly unknown[]
 }
 
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
@@ -157,6 +165,8 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
       commands.set(definition.name, definition)
     },
   }
+
+  let sessionContextHandler = async (_input: Record<string, unknown>): Promise<unknown[]> => [...(options?.sessionContextResult ?? [])]
 
   const raw = {
     app: { name: "opencode", version: "2.0.2", channel: "stable" },
@@ -198,7 +208,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
       },
       context: async (input: Record<string, unknown>) => {
         calls.sessionContext.push(input)
-        return []
+        return sessionContextHandler(input)
       },
     },
     storage: {
@@ -231,5 +241,8 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     rpcRegistrations,
     storage,
     push: events.push,
+    setSessionContext(handler) {
+      sessionContextHandler = handler
+    },
   }
 }
