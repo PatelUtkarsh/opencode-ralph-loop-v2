@@ -137,8 +137,8 @@ export interface FakeContextOptions {
   /** Seeds the result `ctx.session.get` returns, keyed by sessionID; falls back to the default. */
   readonly sessionGetResult?: Record<string, unknown>
   /** Seeds the result `ctx.session.context` returns; falls back to an empty array. Tests
-   * that need per-call behaviour (e.g. a slow or throwing response) should instead assign
-   * directly to `fake.context.session.context`. */
+   * that need per-call behaviour (e.g. a slow or throwing response) should instead use
+   * `setSessionContext` on the returned `FakeContext`. */
   readonly sessionContextResult?: readonly unknown[]
   /** Seeds the result `ctx.permission.list` returns; falls back to an empty array
    * (no pending permission). */

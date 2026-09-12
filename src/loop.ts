@@ -10,9 +10,10 @@ type Context = Plugin.Context
 
 /** A single transcript message returned by `ctx.session.context`. Assistant
  * messages carry `content` parts; user and synthetic messages carry `text`
- * directly (see the architecture skill, section 5). A `tool` content part
- * (assumed shape, not confirmed against a live server) additionally carries
- * an optional `name` and an optional `state.status`, used by the Skipped
+ * directly (see the architecture skill, section 5). A `tool` content part's
+ * verified shape (OpenCode 2.0.2 schema) is `{ type: "tool", id, name,
+ * state: { status: "streaming" | "running" | "completed" | "error", ... },
+ * time }`; only `name` and `state.status` are used here, by the Skipped
  * Idle question check (ADR-0002). */
 export interface TranscriptMessage {
   readonly type: string
@@ -72,12 +73,17 @@ function escapeRegExp(value: string): string {
 /** Why a Turn End was skipped instead of continuing the Loop (ADR-0002). */
 export type SkippedIdleReason = "permission" | "question" | "inbox"
 
+/** Matches a tool name that is a question/ask tool: `question`, `ask`, or
+ * either word set off by `_`, `.`, `-`, start, or end (`ask_user`,
+ * `duty_question`). Does not match `task`, since `ask` must be a whole
+ * word segment. */
+const QUESTION_TOOL_NAME_PATTERN = /(^|[_.\-])(question|ask)([_.\-]|$)/i
+
 /** True when the last assistant message contains a question/ask tool call
- * (name containing "question" or "ask", case-insensitive) that has no
- * completed result. Assumed shape: `{ type: "tool", name?, state?: { status } }`
- * (see the architecture skill, section 5, and the docstring on
- * `TranscriptMessage`); this shape has not been confirmed against a live
- * server. */
+ * that is still open. A tool call counts only when its name matches
+ * `QUESTION_TOOL_NAME_PATTERN` and its `state.status` is `"streaming"` or
+ * `"running"`; a missing or unknown `state` is not open (verified tool
+ * content shape, see the docstring on `TranscriptMessage`). */
 function hasOpenQuestionToolCall(messages: readonly TranscriptMessage[]): boolean {
   let lastAssistant: TranscriptMessage | undefined
   for (const message of messages) {
@@ -87,69 +93,41 @@ function hasOpenQuestionToolCall(messages: readonly TranscriptMessage[]): boolea
 
   for (const part of lastAssistant.content ?? []) {
     if (part.type !== "tool") continue
-    const name = (part.name ?? "").toLowerCase()
-    if (!name.includes("question") && !name.includes("ask")) continue
-    if (part.state?.status !== "completed") return true
+    if (!QUESTION_TOOL_NAME_PATTERN.test(part.name ?? "")) continue
+    const status = part.state?.status
+    if (status === "streaming" || status === "running") return true
   }
   return false
-}
-
-/** Narrows an unknown value to the `{ time: { updated, idle? } }` shape
- * `ctx.session.get` returns. Anything that does not match is treated as
- * missing rather than trusted. */
-function isSessionTimeInfo(value: unknown): value is { time: { updated: number; idle?: number } } {
-  if (typeof value !== "object" || value === null) return false
-  const time = (value as Record<string, unknown>)["time"]
-  if (typeof time !== "object" || time === null) return false
-  const timeRecord = time as Record<string, unknown>
-  if (typeof timeRecord["updated"] !== "number") return false
-  if (timeRecord["idle"] !== undefined && typeof timeRecord["idle"] !== "number") return false
-  return true
-}
-
-/**
- * Fallback for a pending inbox item (spec.md step 3). `ctx.session`'s
- * `SessionDomain` (`node_modules/@opencode/plugin/dist/promise/session.d.ts`)
- * is `Pick<SessionApi, "create" | "get" | "switchAgent" | "switchModel" |
- * "prompt" | "generate" | "command" | "synthetic" | "interrupt" | "rename" |
- * "move" | "wait" | "context">`: no `inbox`. `Plugin.Context` has no other
- * client handle either (no `context.client`), so there is no way to read
- * the inbox directly from a plugin. This reads `ctx.session.get` instead
- * and treats the Turn End as having a pending inbox item when the session's
- * `time.idle` is still undefined while `time.updated` is newer than `since`
- * (the last Turn End this module handled for the session, or the Loop's
- * `startedAt` for the first one). This is a known-weak heuristic, recorded
- * in the ticket comments: `time.idle` is normally set by the time a
- * `session.execution.succeeded` event reaches this handler, so this branch
- * is expected to fire rarely, only in a narrow timing race, not on every
- * queued message.
- */
-async function hasPendingInboxItem(context: Context, sessionID: string, since: number): Promise<boolean> {
-  const raw: unknown = await context.session.get({ sessionID })
-  if (!isSessionTimeInfo(raw)) return false
-  if (raw.time.idle !== undefined) return false
-  return raw.time.updated > since
 }
 
 /**
  * Skipped Idle checks (ADR-0002, spec.md "On Turn End" steps 1-3), run in
  * order: a pending permission request, an open question/ask tool call in
- * the last assistant message, then a pending inbox item. Returns the first
- * reason that hits, or `undefined` when the Turn End should proceed
- * normally. `since` anchors the inbox fallback (see `hasPendingInboxItem`).
+ * the last assistant message, then a pending inbox item (from
+ * `pendingInboxIDs`, tracked from the event stream; see
+ * `subscribeToTurnEnd`). Returns the first reason that hits, or `undefined`
+ * when the Turn End should proceed normally. A `permission.list` rejection
+ * is caught and treated as no pending permission, so one failing check
+ * never aborts the Turn End.
  */
 export async function detectSkippedIdle(
   context: Context,
   sessionID: string,
   messages: readonly TranscriptMessage[],
-  since: number,
+  pendingInboxIDs: ReadonlySet<string> | undefined,
 ): Promise<SkippedIdleReason | undefined> {
-  const pendingPermissions: unknown = await context.permission.list({ sessionID })
+  let pendingPermissions: unknown
+  try {
+    pendingPermissions = await context.permission.list({ sessionID })
+  } catch (error) {
+    console.error(`[ralph-loop] permission.list failed for session ${sessionID}; treating as no pending permission`, error)
+    pendingPermissions = []
+  }
   if (Array.isArray(pendingPermissions) && pendingPermissions.length > 0) return "permission"
 
   if (hasOpenQuestionToolCall(messages)) return "question"
 
-  if (await hasPendingInboxItem(context, sessionID, since)) return "inbox"
+  if (pendingInboxIDs !== undefined && pendingInboxIDs.size > 0) return "inbox"
 
   return undefined
 }
@@ -181,10 +159,34 @@ export function findCompletion(messages: readonly TranscriptMessage[], promise: 
 /** Turn End events this module reacts to (ADR-0004). */
 const TURN_END_EVENT_TYPE = "session.execution.succeeded"
 
+/** Inbox events tracked for the Skipped Idle inbox check (verified shapes):
+ * `session.inbox.enqueued` carries `data: { sessionID, inboxID, item: { type,
+ * payload } }`; `session.inbox.delivered` and `session.inbox.cancelled`
+ * carry `data: { sessionID, inboxID }`. */
+const INBOX_ENQUEUED_EVENT_TYPE = "session.inbox.enqueued"
+const INBOX_DELIVERED_EVENT_TYPE = "session.inbox.delivered"
+const INBOX_CANCELLED_EVENT_TYPE = "session.inbox.cancelled"
+const SESSION_DELETED_EVENT_TYPE = "session.deleted"
+
 /** Extracts `data.sessionID` from an event, tolerating an untyped payload. */
 function eventSessionID(event: { readonly data?: Record<string, unknown> }): string | undefined {
   const sessionID = event.data?.["sessionID"]
   return typeof sessionID === "string" ? sessionID : undefined
+}
+
+/** Extracts `data.inboxID` from an event, tolerating an untyped payload. */
+function eventInboxID(event: { readonly data?: Record<string, unknown> }): string | undefined {
+  const inboxID = event.data?.["inboxID"]
+  return typeof inboxID === "string" ? inboxID : undefined
+}
+
+/** Extracts `data.item.type` from a `session.inbox.enqueued` event,
+ * tolerating an untyped payload. */
+function eventInboxItemType(event: { readonly data?: Record<string, unknown> }): string | undefined {
+  const item = event.data?.["item"]
+  if (typeof item !== "object" || item === null) return undefined
+  const type = (item as Record<string, unknown>)["type"]
+  return typeof type === "string" ? type : undefined
 }
 
 /** Fetches the transcript for a Loop Session, dropping anything that does not
@@ -228,15 +230,16 @@ type StopReason = "completed" | "max-iterations"
  */
 export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void {
   const inFlight = new Set<string>()
-  /** The moment this module last finished handling a Turn End for a
-   * session, used as the `since` anchor for the inbox Skipped Idle
-   * fallback (see `hasPendingInboxItem`). Falls back to the Loop's
-   * `startedAt` for a session's first Turn End. */
-  const lastTurnEndAt = new Map<string, number>()
+  /** Inbox items enqueued but not yet delivered or cancelled, by session
+   * (spec.md "On Turn End" step 3). Tracked from the event stream rather
+   * than read from `ctx.session`, which exposes no inbox listing method
+   * (see the docstring on `detectSkippedIdle`). In-memory only: cleared on
+   * stop and on `session.deleted`. */
+  const pendingInbox = new Map<string, Set<string>>()
 
   async function stop(sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
     await removeLoopState(context, sessionID)
-    lastTurnEndAt.delete(sessionID)
+    pendingInbox.delete(sessionID)
     const deltas = await computeDeltas(context, sessionID, state)
     const text =
       reason === "completed"
@@ -253,12 +256,10 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
       if (state === undefined) return
 
       const messages = await fetchMessages(context, sessionID)
-      const since = lastTurnEndAt.get(sessionID) ?? Date.parse(state.startedAt)
 
-      const skippedIdleReason = await detectSkippedIdle(context, sessionID, messages, since)
+      const skippedIdleReason = await detectSkippedIdle(context, sessionID, messages, pendingInbox.get(sessionID))
       if (skippedIdleReason !== undefined) {
         if (!state.paused) await writeLoopState(context, { ...state, paused: true })
-        lastTurnEndAt.set(sessionID, Date.now())
         return
       }
 
@@ -286,8 +287,6 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
         }),
         delivery: "steer",
       })
-
-      lastTurnEndAt.set(sessionID, Date.now())
     } finally {
       inFlight.delete(sessionID)
     }
@@ -305,12 +304,37 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal): void 
   void (async () => {
     try {
       for await (const event of context.event.subscribe({ signal })) {
-        if (event.type !== TURN_END_EVENT_TYPE) continue
-
         if (event.location?.directory !== undefined && event.location.directory !== context.location.directory) continue
 
         const sessionID = eventSessionID(event)
         if (sessionID === undefined) continue
+
+        if (event.type === INBOX_ENQUEUED_EVENT_TYPE) {
+          const inboxID = eventInboxID(event)
+          if (inboxID !== undefined && eventInboxItemType(event) === "user") {
+            const pending = pendingInbox.get(sessionID) ?? new Set<string>()
+            pending.add(inboxID)
+            pendingInbox.set(sessionID, pending)
+          }
+          continue
+        }
+
+        if (event.type === INBOX_DELIVERED_EVENT_TYPE || event.type === INBOX_CANCELLED_EVENT_TYPE) {
+          const inboxID = eventInboxID(event)
+          const pending = pendingInbox.get(sessionID)
+          if (inboxID !== undefined && pending !== undefined) {
+            pending.delete(inboxID)
+            if (pending.size === 0) pendingInbox.delete(sessionID)
+          }
+          continue
+        }
+
+        if (event.type === SESSION_DELETED_EVENT_TYPE) {
+          pendingInbox.delete(sessionID)
+          continue
+        }
+
+        if (event.type !== TURN_END_EVENT_TYPE) continue
 
         runHandleTurnEnd(sessionID)
       }
