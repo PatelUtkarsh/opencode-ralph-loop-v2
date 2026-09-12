@@ -1,4 +1,5 @@
 // Prompt and Notice text builders. See spec.md "Start Prompt" and "Continuation Prompt".
+import type { StopReason } from "./loop.ts"
 
 /** The Rules block repeated in every Start Prompt and Continuation Prompt. */
 export const RULES_BLOCK = [
@@ -83,4 +84,33 @@ export function buildMaxIterationsNotice(options: {
     `Ralph Loop stopped: reached Max Iterations (${options.iteration}/${options.maxIterations}).`,
     formatDeltaLine(options.costDelta, options.tokenDelta),
   ].join("\n")
+}
+
+/** The remaining Stop Reasons: cancelled, interrupted, failed. These report
+ * the Iteration reached and no cost/token deltas (spec.md "Stop"). Derived
+ * from `loop.ts`'s `StopReason` so the two Notice-shape groups (deltas vs.
+ * no deltas) cannot drift apart. */
+export type StoppedReason = Exclude<StopReason, "completed" | "max-iterations">
+
+/** Notice posted when a Loop stops for `cancelled`, `interrupted`, or `failed`. */
+export function buildStoppedNotice(reason: StoppedReason, iteration: number): string {
+  return `Ralph Loop ${reason} after ${iteration} Iteration${iteration === 1 ? "" : "s"}.`
+}
+
+/** Notice posted by `/ralph-status` when a Loop is active. */
+export function buildStatusNotice(options: {
+  readonly iteration: number
+  readonly maxIterations: number
+  readonly paused: boolean
+  readonly task: string
+}): string {
+  return [
+    `Ralph Loop status: Iteration ${options.iteration}/${options.maxIterations}${options.paused ? " (paused)" : ""}.`,
+    `Task: ${options.task}`,
+  ].join("\n")
+}
+
+/** Notice posted by `/cancel-ralph` and `/ralph-status` when the session has no Loop. */
+export function buildNoActiveLoopNotice(): string {
+  return "No active Ralph Loop in this session."
 }
