@@ -127,8 +127,15 @@ function createEventSource() {
   return { push, subscribe }
 }
 
+export interface FakeContextOptions {
+  /** Seeds `ctx.options`, e.g. plugin options like `maxIterations` and `promise`. */
+  readonly options?: Record<string, unknown>
+  /** Seeds the result `ctx.session.get` returns, keyed by sessionID; falls back to the default. */
+  readonly sessionGetResult?: Record<string, unknown>
+}
+
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
-export function createFakeContext(): FakeContext {
+export function createFakeContext(options?: FakeContextOptions): FakeContext {
   const calls: FakeContextCalls = {
     sessionPrompt: [],
     sessionSynthetic: [],
@@ -154,7 +161,7 @@ export function createFakeContext(): FakeContext {
   const raw = {
     app: { name: "opencode", version: "2.0.2", channel: "stable" },
     location: { directory: "/tmp/ralph-loop-fake", project: { id: "fake-project", directory: "/tmp/ralph-loop-fake", canonical: "/tmp/ralph-loop-fake" } },
-    options: {},
+    options: options?.options ?? {},
     command: {
       transform: async (callback: (input: FakeCommandEditor) => void) => {
         callback(editor)
@@ -187,7 +194,7 @@ export function createFakeContext(): FakeContext {
       },
       get: async (input: Record<string, unknown>) => {
         calls.sessionGet.push(input)
-        return { id: input["sessionID"], cost: 0, tokens: { input: 0, output: 0 } }
+        return options?.sessionGetResult ?? { id: input["sessionID"], cost: 0, tokens: { input: 0, output: 0 } }
       },
       context: async (input: Record<string, unknown>) => {
         calls.sessionContext.push(input)
