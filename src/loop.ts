@@ -146,80 +146,100 @@ export async function stopLoop(context: Context, sessionID: string, state: LoopS
 }
 
 /**
+ * Runs the Turn End handling for one Loop Session: continues the Loop with
+ * the next Continuation Prompt, or stops it (completed / max iterations).
+ * Exported so Resume (ticket 06) can call it directly for a Loop Session
+ * that is idle after a service restart, the same way a live Turn End event
+ * does.
+ */
+export async function runTurnEnd(context: Context, sessionID: string): Promise<void> {
+  const state = await readLoopState(context, sessionID)
+  if (state === undefined) return
+
+  const messages = await fetchMessages(context, sessionID)
+
+  if (findCompletion(messages, state.promise)) {
+    await stopLoop(context, sessionID, state, "completed")
+    return
+  }
+
+  if (state.iteration >= state.maxIterations) {
+    await stopLoop(context, sessionID, state, "max-iterations")
+    return
+  }
+
+  // A stop (cancel-ralph, interrupted, or failed) can land while this
+  // handler was awaiting fetchMessages above. Re-read state right
+  // before writing so a concurrent stop is not resurrected by this
+  // write, and no Continuation Prompt is sent for a Loop that no
+  // longer exists.
+  const stillActive = await readLoopState(context, sessionID)
+  if (stillActive === undefined) return
+
+  const nextIteration = stillActive.iteration + 1
+  const nextState: LoopState = { ...stillActive, iteration: nextIteration, paused: false }
+  await writeLoopState(context, nextState)
+
+  await context.session.prompt({
+    sessionID,
+    text: buildContinuationPrompt({
+      iteration: nextIteration,
+      maxIterations: stillActive.maxIterations,
+      task: stillActive.task,
+      promise: stillActive.promise,
+    }),
+    delivery: "steer",
+  })
+}
+
+/** What `subscribeToTurnEnd` returns: the guarded Turn End handler, so a
+ * caller outside the live event stream (Resume, in `src/resume.ts`) can
+ * route through the same re-entrancy guard instead of calling `runTurnEnd`
+ * directly and risking a race with a live Turn End event for the same
+ * session. */
+export interface TurnEndSubscription {
+  readonly handleTurnEnd: (sessionID: string) => Promise<void>
+}
+
+/**
  * Starts the Turn End subscription. Call once from `setup`; abort the
  * signal you pass in during cleanup.
  */
-export function subscribeToTurnEnd(context: Context, signal: AbortSignal, options?: { readonly stopOnFailure?: boolean }): void {
+export function subscribeToTurnEnd(
+  context: Context,
+  signal: AbortSignal,
+  options?: { readonly stopOnFailure?: boolean },
+): TurnEndSubscription {
   const inFlight = new Set<string>()
   const stopOnFailure = options?.stopOnFailure ?? true
 
+  /** Runs the Turn End handler and swallows any rejection: one session's
+   * failure must never become an unhandled rejection that could take down
+   * the host process, and must never stop other sessions' Loops. Also the
+   * re-entrancy guard: a second call for a session already in flight is a
+   * no-op, whether it comes from a live event or from Resume. */
   async function handleTurnEnd(sessionID: string): Promise<void> {
     if (inFlight.has(sessionID)) return
     inFlight.add(sessionID)
     try {
-      const state = await readLoopState(context, sessionID)
-      if (state === undefined) return
-
-      const messages = await fetchMessages(context, sessionID)
-
-      if (findCompletion(messages, state.promise)) {
-        await stopLoop(context, sessionID, state, "completed")
-        return
-      }
-
-      if (state.iteration >= state.maxIterations) {
-        await stopLoop(context, sessionID, state, "max-iterations")
-        return
-      }
-
-      // A stop (cancel-ralph, interrupted, or failed) can land while this
-      // handler was awaiting fetchMessages above. Re-read state right
-      // before writing so a concurrent stop is not resurrected by this
-      // write, and no Continuation Prompt is sent for a Loop that no
-      // longer exists.
-      const stillActive = await readLoopState(context, sessionID)
-      if (stillActive === undefined) return
-
-      const nextIteration = stillActive.iteration + 1
-      const nextState: LoopState = { ...stillActive, iteration: nextIteration, paused: false }
-      await writeLoopState(context, nextState)
-
-      await context.session.prompt({
-        sessionID,
-        text: buildContinuationPrompt({
-          iteration: nextIteration,
-          maxIterations: stillActive.maxIterations,
-          task: stillActive.task,
-          promise: stillActive.promise,
-        }),
-        delivery: "steer",
-      })
+      await runTurnEnd(context, sessionID)
+    } catch (error) {
+      console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
     } finally {
       inFlight.delete(sessionID)
     }
   }
 
   /** Stops a Loop Session for `interrupted` or `failed`, ignoring sessions
-   * with no Loop in storage. */
+   * with no Loop in storage. Swallows rejections like `handleTurnEnd`. */
   async function handleStopEvent(sessionID: string, reason: "interrupted" | "failed"): Promise<void> {
-    const state = await readLoopState(context, sessionID)
-    if (state === undefined) return
-    await stopLoop(context, sessionID, state, reason)
-  }
-
-  /** Runs a handler and swallows any rejection: one session's failure must
-   * never become an unhandled rejection that could take down the host
-   * process, and must never stop other sessions' Loops. */
-  function runHandleTurnEnd(sessionID: string): void {
-    handleTurnEnd(sessionID).catch((error: unknown) => {
-      console.error(`[ralph-loop] Turn End handling failed for session ${sessionID}`, error)
-    })
-  }
-
-  function runHandleStopEvent(sessionID: string, reason: "interrupted" | "failed"): void {
-    handleStopEvent(sessionID, reason).catch((error: unknown) => {
+    try {
+      const state = await readLoopState(context, sessionID)
+      if (state === undefined) return
+      await stopLoop(context, sessionID, state, reason)
+    } catch (error) {
       console.error(`[ralph-loop] ${reason} handling failed for session ${sessionID}`, error)
-    })
+    }
   }
 
   void (async () => {
@@ -231,12 +251,12 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal, option
         if (sessionID === undefined) continue
 
         if (event.type === TURN_END_EVENT_TYPE) {
-          runHandleTurnEnd(sessionID)
+          void handleTurnEnd(sessionID)
         } else if (event.type === "session.execution.interrupted") {
-          runHandleStopEvent(sessionID, "interrupted")
+          void handleStopEvent(sessionID, "interrupted")
         } else if (event.type === "session.execution.failed") {
-          if (stopOnFailure) runHandleStopEvent(sessionID, "failed")
-          else runHandleTurnEnd(sessionID)
+          if (stopOnFailure) void handleStopEvent(sessionID, "failed")
+          else void handleTurnEnd(sessionID)
         } else if (event.type === "session.deleted") {
           removeLoopState(context, sessionID).catch((error: unknown) => {
             console.error(`[ralph-loop] removing state for deleted session ${sessionID} failed`, error)
@@ -248,4 +268,6 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal, option
       console.error("[ralph-loop] Turn End subscription failed", error)
     }
   })()
+
+  return { handleTurnEnd }
 }

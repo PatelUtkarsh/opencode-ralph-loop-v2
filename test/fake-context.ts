@@ -69,6 +69,10 @@ export interface FakeContext {
    * static `sessionContextResult` seed cannot express, e.g. a response that
    * varies per call, is delayed, or throws. */
   setSessionContext(handler: (input: Record<string, unknown>) => Promise<unknown[]>): void
+  /** Overrides `ctx.session.get` for a test. Use this for behaviour the
+   * static `sessionGetResult` seed cannot express, e.g. throwing for one
+   * sessionID (not found) while returning a busy/idle shape for others. */
+  setSessionGet(handler: (input: Record<string, unknown>) => Promise<unknown>): void
 }
 
 interface PendingPull {
@@ -140,6 +144,10 @@ export interface FakeContextOptions {
    * that need per-call behaviour (e.g. a slow or throwing response) should instead assign
    * directly to `fake.context.session.context`. */
   readonly sessionContextResult?: readonly unknown[]
+  /** Caps the number of entries `ctx.storage.scan` returns per call, regardless of the
+   * caller's requested `limit`, simulating a backend that enforces its own page size.
+   * Use this to test cursor pagination (`next`) across more than one call. */
+  readonly storageScanPageSize?: number
 }
 
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
@@ -167,6 +175,8 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
   }
 
   let sessionContextHandler = async (_input: Record<string, unknown>): Promise<unknown[]> => [...(options?.sessionContextResult ?? [])]
+  let sessionGetHandler = async (input: Record<string, unknown>): Promise<unknown> =>
+    options?.sessionGetResult ?? { id: input["sessionID"], cost: 0, tokens: { input: 0, output: 0 } }
 
   const raw = {
     app: { name: "opencode", version: "2.0.2", channel: "stable" },
@@ -204,7 +214,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
       },
       get: async (input: Record<string, unknown>) => {
         calls.sessionGet.push(input)
-        return options?.sessionGetResult ?? { id: input["sessionID"], cost: 0, tokens: { input: 0, output: 0 } }
+        return sessionGetHandler(input)
       },
       context: async (input: Record<string, unknown>) => {
         calls.sessionContext.push(input)
@@ -224,12 +234,19 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
         calls.storageRemove.push(key)
         storage.delete(key)
       },
-      scan: async (options: { prefix: string; after?: string; limit?: number }) => {
-        calls.storageScan.push(options)
-        const entries = [...storage.entries()]
-          .filter(([key]) => key.startsWith(options.prefix))
+      scan: async (scanOptions: { prefix: string; after?: string; limit?: number }) => {
+        calls.storageScan.push(scanOptions)
+        const matching = [...storage.entries()]
+          .filter(([key]) => key.startsWith(scanOptions.prefix))
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
           .map(([key, value]) => ({ key, value }))
-        return { entries }
+        const startIndex = scanOptions.after === undefined ? 0 : matching.findIndex(({ key }) => key === scanOptions.after) + 1
+        const requestedLimit = scanOptions.limit ?? matching.length
+        const pageSize = options?.storageScanPageSize
+        const limit = pageSize === undefined ? requestedLimit : Math.min(requestedLimit, pageSize)
+        const page = matching.slice(startIndex, startIndex + limit)
+        const next = startIndex + limit < matching.length ? page.at(-1)?.key : undefined
+        return { entries: page, next }
       },
     },
   }
@@ -243,6 +260,9 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     push: events.push,
     setSessionContext(handler) {
       sessionContextHandler = handler
+    },
+    setSessionGet(handler) {
+      sessionGetHandler = handler
     },
   }
 }
