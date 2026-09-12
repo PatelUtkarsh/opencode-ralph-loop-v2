@@ -9,8 +9,8 @@ import {
   buildStartPrompt,
   buildStatusNotice,
 } from "./prompts.ts"
-import { stopLoop } from "./loop.ts"
-import { readLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
+import { isSessionCostInfo, stopLoop } from "./loop.ts"
+import { readLoopState, writeLoopState, type LoopState } from "./state.ts"
 
 type Context = Plugin.Context
 
@@ -38,7 +38,8 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
 
     const { task, promise, maxIterations, clamped } = parsed.args
 
-    const info = (await context.session.get({ sessionID })) as { cost: number; tokens: LoopTokenUsage }
+    const rawInfo: unknown = await context.session.get({ sessionID })
+    const info = isSessionCostInfo(rawInfo) ? rawInfo : { cost: 0, tokens: { input: 0, output: 0 } }
 
     const state: LoopState = {
       sessionID,

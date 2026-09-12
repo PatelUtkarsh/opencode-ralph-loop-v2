@@ -1,7 +1,8 @@
-// Turn End handling: continues a Loop with the next Continuation Prompt, or
-// stops it with a completion / max-iterations Notice. See spec.md "Turn End
-// detection" and "On Turn End", and ADR-0004 (session.execution.succeeded,
-// never session.idle).
+// Turn End handling and the remaining Stop Reasons. Continues a Loop with
+// the next Continuation Prompt, or stops it (completed, max-iterations,
+// cancelled, interrupted, failed, or session.deleted) with the matching
+// Notice. See spec.md "Turn End detection", "On Turn End", and "Stop", and
+// ADR-0004 (session.execution.succeeded, never session.idle).
 import type { Plugin } from "@opencode/plugin"
 import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
 import { readLoopState, removeLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
@@ -39,8 +40,9 @@ function isTranscriptMessage(value: unknown): value is TranscriptMessage {
 
 /** Narrows an unknown value to the `{ cost, tokens }` shape `ctx.session.get`
  * returns. Anything that does not match is treated as missing rather than
- * trusted. */
-function isSessionCostInfo(value: unknown): value is { cost: number; tokens: LoopTokenUsage } {
+ * trusted. Exported so `src/commands.ts` can validate the same shape when
+ * starting a Loop instead of casting. */
+export function isSessionCostInfo(value: unknown): value is { cost: number; tokens: LoopTokenUsage } {
   if (typeof value !== "object" || value === null) return false
   const info = value as Record<string, unknown>
   if (typeof info["cost"] !== "number") return false
@@ -151,10 +153,6 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal, option
   const inFlight = new Set<string>()
   const stopOnFailure = options?.stopOnFailure ?? true
 
-  async function stop(sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
-    await stopLoop(context, sessionID, state, reason)
-  }
-
   async function handleTurnEnd(sessionID: string): Promise<void> {
     if (inFlight.has(sessionID)) return
     inFlight.add(sessionID)
@@ -165,26 +163,34 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal, option
       const messages = await fetchMessages(context, sessionID)
 
       if (findCompletion(messages, state.promise)) {
-        await stop(sessionID, state, "completed")
+        await stopLoop(context, sessionID, state, "completed")
         return
       }
 
       if (state.iteration >= state.maxIterations) {
-        await stop(sessionID, state, "max-iterations")
+        await stopLoop(context, sessionID, state, "max-iterations")
         return
       }
 
-      const nextIteration = state.iteration + 1
-      const nextState: LoopState = { ...state, iteration: nextIteration, paused: false }
+      // A stop (cancel-ralph, interrupted, or failed) can land while this
+      // handler was awaiting fetchMessages above. Re-read state right
+      // before writing so a concurrent stop is not resurrected by this
+      // write, and no Continuation Prompt is sent for a Loop that no
+      // longer exists.
+      const stillActive = await readLoopState(context, sessionID)
+      if (stillActive === undefined) return
+
+      const nextIteration = stillActive.iteration + 1
+      const nextState: LoopState = { ...stillActive, iteration: nextIteration, paused: false }
       await writeLoopState(context, nextState)
 
       await context.session.prompt({
         sessionID,
         text: buildContinuationPrompt({
           iteration: nextIteration,
-          maxIterations: state.maxIterations,
-          task: state.task,
-          promise: state.promise,
+          maxIterations: stillActive.maxIterations,
+          task: stillActive.task,
+          promise: stillActive.promise,
         }),
         delivery: "steer",
       })
@@ -198,7 +204,7 @@ export function subscribeToTurnEnd(context: Context, signal: AbortSignal, option
   async function handleStopEvent(sessionID: string, reason: "interrupted" | "failed"): Promise<void> {
     const state = await readLoopState(context, sessionID)
     if (state === undefined) return
-    await stop(sessionID, state, reason)
+    await stopLoop(context, sessionID, state, reason)
   }
 
   /** Runs a handler and swallows any rejection: one session's failure must

@@ -1,4 +1,5 @@
 // Prompt and Notice text builders. See spec.md "Start Prompt" and "Continuation Prompt".
+import type { StopReason } from "./loop.ts"
 
 /** The Rules block repeated in every Start Prompt and Continuation Prompt. */
 export const RULES_BLOCK = [
@@ -86,8 +87,10 @@ export function buildMaxIterationsNotice(options: {
 }
 
 /** The remaining Stop Reasons: cancelled, interrupted, failed. These report
- * the Iteration reached and no cost/token deltas (spec.md "Stop"). */
-export type StoppedReason = "cancelled" | "interrupted" | "failed"
+ * the Iteration reached and no cost/token deltas (spec.md "Stop"). Derived
+ * from `loop.ts`'s `StopReason` so the two Notice-shape groups (deltas vs.
+ * no deltas) cannot drift apart. */
+export type StoppedReason = Exclude<StopReason, "completed" | "max-iterations">
 
 /** Notice posted when a Loop stops for `cancelled`, `interrupted`, or `failed`. */
 export function buildStoppedNotice(reason: StoppedReason, iteration: number): string {

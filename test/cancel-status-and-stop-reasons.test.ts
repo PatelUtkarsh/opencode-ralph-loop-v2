@@ -140,10 +140,89 @@ describe("session.execution.failed", () => {
     await tick()
 
     expect(fake.storage.has(loopStorageKey(SESSION_ID))).toBe(true)
-    const state = fake.storage.get(loopStorageKey(SESSION_ID)) as LoopState
-    expect(state.iteration).toBe(3)
+    expect(fake.storage.get(loopStorageKey(SESSION_ID))).toMatchObject({ iteration: 3 })
     expect(fake.calls.sessionPrompt).toHaveLength(1)
     expect(String(fake.calls.sessionPrompt[0]?.["text"])).toContain("[RALPH LOOP - ITERATION 3/5]")
+    expect(fake.calls.sessionSynthetic).toHaveLength(0)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("interrupted or failed for a session with no Loop produces no Notice and no storage change", async () => {
+    const fake = createFakeContext()
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.interrupted", data: { sessionID: "ses_unrelated" } })
+    fake.push({ type: "session.execution.failed", data: { sessionID: "ses_unrelated" } })
+    await tick()
+
+    expect(fake.calls.sessionSynthetic).toHaveLength(0)
+    expect(fake.storage.has(loopStorageKey("ses_unrelated"))).toBe(false)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("a stop handler whose session.synthetic throws leaves the subscription alive for other sessions", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+    const otherSessionID = "ses_other"
+    fake.storage.set(loopStorageKey(otherSessionID), baseState({ sessionID: otherSessionID }))
+    fake.setSessionContext(async () => [
+      { type: "user", text: "Do the thing" },
+      { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+    ])
+
+    const failingContext = fake.context as unknown as { session: { synthetic: (input: Record<string, unknown>) => Promise<unknown> } }
+    const originalSynthetic = failingContext.session.synthetic
+    failingContext.session.synthetic = async (input: Record<string, unknown>) => {
+      if (input["sessionID"] === SESSION_ID) throw new Error("synthetic boom")
+      return originalSynthetic(input)
+    }
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.failed", data: { sessionID: SESSION_ID } })
+    await tick()
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: otherSessionID } })
+    await tick()
+
+    expect(fake.calls.sessionPrompt).toHaveLength(1)
+    expect(fake.calls.sessionPrompt[0]?.["sessionID"]).toBe(otherSessionID)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+})
+
+describe("Turn End race with a concurrent stop", () => {
+  test("cancel-ralph mid Turn End prevents the write and the Continuation Prompt", async () => {
+    const fake = createFakeContext()
+    fake.storage.set(loopStorageKey(SESSION_ID), baseState())
+
+    let resolveContext: (() => void) | undefined
+    fake.setSessionContext(async () => {
+      await new Promise<void>((resolve) => {
+        resolveContext = resolve
+      })
+      return [
+        { type: "user", text: "Do the thing" },
+        { type: "assistant", content: [{ type: "text", text: "Still working." }] },
+      ]
+    })
+
+    const cleanup = await Plugin.setup(fake.context)
+    fake.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    const command = fake.commands.get("cancel-ralph")
+    if (!command) throw new Error("cancel-ralph command was not registered")
+    await command.execute({ sessionID: SESSION_ID, prompt: { text: "" }, delivery: "steer" })
+
+    expect(fake.storage.has(loopStorageKey(SESSION_ID))).toBe(false)
+
+    resolveContext?.()
+    await tick()
+
+    expect(fake.storage.has(loopStorageKey(SESSION_ID))).toBe(false)
+    expect(fake.calls.sessionPrompt).toHaveLength(0)
 
     if (typeof cleanup === "function") await cleanup()
   })
