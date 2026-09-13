@@ -42,7 +42,7 @@ To move to a newer release, remove the old pin and add the new one:
 
 ```sh
 opencode plugin remove "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.1"
-opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.3"
+opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.4"
 ```
 
 Releases are listed at
@@ -215,11 +215,12 @@ must keep its first-line `/** @jsxImportSource @opentui/solid */` pragma:
 Bun reads `tsconfig.json` from the process cwd, not from the file, so the
 tsconfig setting is not seen when OpenCode loads the plugin from its cache,
 and without the pragma the TUI plugin fails with `Cannot find package
-'react'`. Second, `@opentui/core`, `@opentui/solid`, and `solid-js` must
-stay devDependencies, never regular dependencies. The TUI host provides
-them at runtime; a second `solid-js` copy inside the plugin's own
-`node_modules` gives the Indicator a separate reactive graph, so the footer
-renders once and never updates.
+'react'`. Second, `@opentui/core` and `@opentui/solid` must be regular
+dependencies (the TUI host does not supply them), but `solid-js` must stay
+a devDependency. The host renders with its own `solid-js`; a second copy
+inside the plugin's `node_modules` gives the Indicator a separate reactive
+graph, so the footer renders once and never updates. `@opentui/solid`
+declares `solid-js` as a peer, so it does not pull one in.
 
 ### Releasing
 
