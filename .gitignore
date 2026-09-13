@@ -1,2 +1,7 @@
 node_modules/
 .DS_Store
+
+# Local agent tooling, not part of the plugin
+.agents/
+.opencode/
+skills-lock.json
