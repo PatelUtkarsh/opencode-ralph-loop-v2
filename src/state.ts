@@ -47,11 +47,11 @@ export async function readLoopState(context: Context, sessionID: string): Promis
  * apply it to a raw `storage.scan` entry it already holds instead of
  * re-reading and casting the key.
  *
- * A Loop persisted before ADR-0006 carries no `directory` and is claimed by
- * whichever instance reads it first; `readOwnedLoopState` back-fills the
- * value so the next write settles the ownership. A value that is not an
- * object at all is owned by nobody, so a corrupt entry is left alone
- * rather than acted on.
+ * A Loop persisted before ADR-0006 carries no `directory` and is owned by
+ * every instance, so more than one can act on it until a write settles the
+ * ownership: the write claims, not the read. ADR-0006 accepts that race.
+ * A value that is not an object at all is owned by nobody, so a corrupt
+ * entry is left alone rather than acted on.
  */
 export function ownsLoop(value: unknown, directory: string): boolean {
   if (typeof value !== "object" || value === null) return false
@@ -65,14 +65,20 @@ export function ownsLoop(value: unknown, directory: string): boolean {
  * session exactly like a session with no Loop: no prompt, no Notice, no
  * storage write. Every read path uses this rather than `readLoopState`.
  *
- * A Loop with no recorded `directory` is claimed here and comes back with
- * this instance's directory filled in, so the next `writeLoopState`
- * persists the ownership.
+ * A Loop with no recorded `directory` comes back with this instance's
+ * directory filled in, so the next `writeLoopState` persists the claim.
+ * Until that write lands another instance can read and act on the same
+ * Loop; ADR-0006 accepts that race, since it can only affect a Loop
+ * written before that ADR.
+ *
+ * `src/commands.ts`'s start command is the one read that deliberately uses
+ * `readLoopState` instead, so `/ralph-loop` refuses rather than silently
+ * taking a running Loop away from another instance.
  */
 export async function readOwnedLoopState(context: Context, sessionID: string): Promise<LoopState | undefined> {
   const state = await readLoopState(context, sessionID)
-  if (!ownsLoop(state, context.location.directory)) return undefined
   if (state === undefined) return undefined
+  if (!ownsLoop(state, context.location.directory)) return undefined
   if (state.directory !== undefined) return state
   return { ...state, directory: context.location.directory }
 }

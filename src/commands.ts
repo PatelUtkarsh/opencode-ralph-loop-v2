@@ -25,13 +25,17 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
   return async function execute(input: RalphCommandInput): Promise<void> {
     const { sessionID, prompt, delivery } = input
 
-    // Ownership-aware (ADR-0006): a Loop recorded against another directory
-    // is not visible here, so this start claims the key. That is the
-    // deliberate recovery path for a Loop whose owning instance is gone,
-    // e.g. after the Loop Session moved to another project.
-    const existing = await readOwnedLoopState(context, sessionID)
+    // The one read that deliberately ignores ownership (ADR-0006). A Loop
+    // owned by another loaded location is still a Loop in this session:
+    // silently overwriting its state would leave its owner prompting
+    // against the new Task. Refuse instead, and name the owner, because
+    // /cancel-ralph here would report no active Loop.
+    const existing = await readLoopState(context, sessionID)
     if (existing !== undefined) {
-      await context.session.synthetic({ sessionID, text: buildAlreadyActiveNotice() })
+      await context.session.synthetic({
+        sessionID,
+        text: buildAlreadyActiveNotice({ ownerDirectory: existing.directory, directory: context.location.directory }),
+      })
       return
     }
 

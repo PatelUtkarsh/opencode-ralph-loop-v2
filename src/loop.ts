@@ -368,15 +368,20 @@ export function subscribeToTurnEnd(
 
   /** Drops a deleted session's Loop: reads state first so a session that
    * never had a Loop costs no storage write and emits nothing, then removes
-   * state, clears its inbox tracking, and emits `changed` with reason
-   * `deleted` so a TUI Indicator watching that session clears too. Posts no
-   * Notice: the transcript it would go to no longer exists. */
+   * state and emits `changed` with reason `deleted` so a TUI Indicator
+   * watching that session clears too. Posts no Notice: the transcript it
+   * would go to no longer exists.
+   *
+   * The inbox tracking is dropped first, before the ownership check. Every
+   * instance sees the `session.inbox.*` events and tracks them, owner or
+   * not, so every instance must drain its own entry or leak it for the
+   * lifetime of the process (ADR-0006). */
   async function handleSessionDeleted(sessionID: string): Promise<void> {
+    pendingInbox.delete(sessionID)
     try {
       const state = await readOwnedLoopState(context, sessionID)
       if (state === undefined) return
       await removeLoopState(context, sessionID)
-      pendingInbox.delete(sessionID)
       emitChanged(sessionID, undefined, "deleted")
     } catch (error) {
       console.error(`[ralph-loop] removing state for deleted session ${sessionID} failed`, error)

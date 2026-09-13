@@ -10,7 +10,7 @@
 import { describe, expect, test } from "bun:test"
 import Plugin from "../src/index.ts"
 import { resumeLoops } from "../src/resume.ts"
-import { loopStorageKey, type LoopState } from "../src/state.ts"
+import { loopStorageKey, ownsLoop, type LoopState } from "../src/state.ts"
 import { createFakeContext } from "./fake-context.ts"
 
 const SESSION_ID = "ses_ralph"
@@ -147,6 +147,39 @@ describe("two plugin instances sharing one storage", () => {
     if (typeof cleanupB === "function") await cleanupB()
   })
 
+  test("an instance drains its inbox tracking for a deleted session it does not own", async () => {
+    // Note on this seam: `pendingInbox` is module scope, so two fakes in
+    // one test process share a single Map, unlike two real instances. To
+    // make a leak observable the Loop is owned by a third directory, so
+    // the deleting instance is a non-owner and nothing else drains for it.
+    const storage = new Map<string, unknown>()
+    const { a } = twoInstances(storage)
+    storage.set(loopStorageKey(SESSION_ID), baseState({ directory: "/tmp/ralph-project-c" }))
+    a.setSessionContext(async () => [...WORKING_TRANSCRIPT])
+
+    const cleanup = await Plugin.setup(a.context)
+
+    a.push({ type: "session.inbox.enqueued", data: { sessionID: SESSION_ID, inboxID: "inbox_1", item: { type: "user" } } })
+    await tick()
+
+    // Deleting the session must drain that entry even though this instance
+    // does not own the Loop, or it leaks for the lifetime of the process.
+    a.push({ type: "session.deleted", data: { sessionID: SESSION_ID } })
+    await tick()
+
+    // A fresh Loop for the same sessionID, now owned by A, must not be
+    // treated as having a pending inbox item: it should continue, not pause.
+    storage.set(loopStorageKey(SESSION_ID), baseState({ directory: DIRECTORY_A }))
+    a.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+    await tick()
+
+    expect(a.calls.sessionPrompt).toHaveLength(1)
+    expect(storage.get(loopStorageKey(SESSION_ID))).toMatchObject({ paused: false, iteration: 2 })
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
   test("/cancel-ralph in directory B for a Loop owned by A posts no active Loop and leaves the Loop alone", async () => {
     const storage = new Map<string, unknown>()
     const { b } = twoInstances(storage)
@@ -219,6 +252,30 @@ describe("two plugin instances sharing one storage", () => {
     expect(b.calls.sessionGet).toHaveLength(0)
   })
 
+  test("/ralph-loop in directory B is refused while A owns a Loop in that session", async () => {
+    const storage = new Map<string, unknown>()
+    const { b } = twoInstances(storage)
+    const state = baseState()
+    storage.set(loopStorageKey(SESSION_ID), state)
+
+    const cleanup = await Plugin.setup(b.context)
+    const command = b.commands.get("ralph-loop")
+    if (!command) throw new Error("ralph-loop command was not registered")
+    await command.execute({ sessionID: SESSION_ID, prompt: { text: "Build something else" }, delivery: "steer" })
+
+    // Starting must not silently take a running Loop away from its owner:
+    // the owner would keep prompting under the new Task's state.
+    expect(storage.get(loopStorageKey(SESSION_ID))).toEqual(state)
+    expect(b.calls.sessionPrompt).toHaveLength(0)
+    const notice = String(b.calls.sessionSynthetic[0]?.["text"])
+    expect(notice).toMatch(/already active/i)
+    // The Notice names the owning directory, since it is not this one and
+    // /cancel-ralph here would report no active Loop.
+    expect(notice).toContain(DIRECTORY_A)
+
+    if (typeof cleanup === "function") await cleanup()
+  })
+
   test("a Loop started in directory A records A as its owner", async () => {
     const storage = new Map<string, unknown>()
     const { a } = twoInstances(storage)
@@ -231,6 +288,29 @@ describe("two plugin instances sharing one storage", () => {
     expect(storage.get(loopStorageKey(SESSION_ID))).toMatchObject({ directory: DIRECTORY_A })
 
     if (typeof cleanup === "function") await cleanup()
+  })
+})
+
+describe("ownsLoop", () => {
+  test("a value that is not an object is owned by nobody", () => {
+    // A corrupt or missing entry must be left alone, not acted on.
+    expect(ownsLoop(undefined, DIRECTORY_A)).toBe(false)
+    expect(ownsLoop(null, DIRECTORY_A)).toBe(false)
+    expect(ownsLoop("loop/ses_x", DIRECTORY_A)).toBe(false)
+    expect(ownsLoop(42, DIRECTORY_A)).toBe(false)
+  })
+
+  test("a Loop with no recorded directory is owned by any instance", () => {
+    const legacy = { ...baseState() } as Record<string, unknown>
+    delete legacy["directory"]
+    expect(ownsLoop(legacy, DIRECTORY_A)).toBe(true)
+    expect(ownsLoop(legacy, DIRECTORY_B)).toBe(true)
+  })
+
+  test("a Loop with a recorded directory is owned only by that directory", () => {
+    const state = baseState({ directory: DIRECTORY_A })
+    expect(ownsLoop(state, DIRECTORY_A)).toBe(true)
+    expect(ownsLoop(state, DIRECTORY_B)).toBe(false)
   })
 })
 
@@ -252,5 +332,39 @@ describe("a Loop with no recorded directory (written before ADR-0006)", () => {
     expect(storage.get(loopStorageKey(SESSION_ID))).toMatchObject({ directory: DIRECTORY_A, iteration: 2 })
 
     if (typeof cleanup === "function") await cleanup()
+  })
+
+  test("can be claimed by both instances at the same Turn End (accepted, see ADR-0006)", async () => {
+    const storage = new Map<string, unknown>()
+    const { a, b } = twoInstances(storage)
+    const legacy = { ...baseState() } as Record<string, unknown>
+    delete legacy["directory"]
+    storage.set(loopStorageKey(SESSION_ID), legacy)
+    a.setSessionContext(async () => [...WORKING_TRANSCRIPT])
+    b.setSessionContext(async () => [...WORKING_TRANSCRIPT])
+
+    const cleanupA = await Plugin.setup(a.context)
+    const cleanupB = await Plugin.setup(b.context)
+
+    a.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    b.push({ type: "session.execution.succeeded", data: { sessionID: SESSION_ID } })
+    await tick()
+    await tick()
+
+    // Pinning the documented outcome rather than implying it: a Loop with
+    // no recorded owner is claimed by the read, and both instances read
+    // before either wrote, so both act. This is the one case ADR-0006
+    // accepts, because it can only happen to a Loop written before that
+    // ADR and only until its first write settles the ownership.
+    expect(a.calls.sessionPrompt).toHaveLength(1)
+    expect(b.calls.sessionPrompt).toHaveLength(1)
+    // Whichever wrote last owns it from now on, and it is one of the two.
+    const claimed = storage.get(loopStorageKey(SESSION_ID)) as LoopState
+    const claimedDirectory = claimed.directory
+    expect(claimedDirectory).toBeDefined()
+    expect([DIRECTORY_A, DIRECTORY_B]).toContain(claimedDirectory ?? "")
+
+    if (typeof cleanupA === "function") await cleanupA()
+    if (typeof cleanupB === "function") await cleanupB()
   })
 })

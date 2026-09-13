@@ -24,9 +24,18 @@ export function buildStartNotice(options: { readonly task: string; readonly maxI
   return lines.join("\n")
 }
 
-/** Notice posted when `/ralph-loop` is refused because a Loop is already active. */
-export function buildAlreadyActiveNotice(): string {
-  return "Ralph Loop is already active in this session. Use /cancel-ralph to stop it before starting a new one."
+/** Notice posted when `/ralph-loop` is refused because a Loop is already
+ * active. `ownerDirectory` is the Loop's owning directory and `directory`
+ * this instance's; when they differ the Notice names the owner, because
+ * `/cancel-ralph` here would report no active Loop and the user needs to
+ * know where to stop it (ADR-0006). */
+export function buildAlreadyActiveNotice(options?: { readonly ownerDirectory?: string; readonly directory?: string }): string {
+  const base = "Ralph Loop is already active in this session."
+  const owner = options?.ownerDirectory
+  if (owner !== undefined && owner !== options?.directory) {
+    return `${base} It is owned by the plugin loaded for ${owner}, so /cancel-ralph here will not stop it; run it in a session there.`
+  }
+  return `${base} Use /cancel-ralph to stop it before starting a new one.`
 }
 
 /** Notice posted when argument parsing fails: unknown flag or empty Task. */
