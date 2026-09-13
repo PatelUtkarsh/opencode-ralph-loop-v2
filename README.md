@@ -35,7 +35,18 @@ opencode plugin add github:PatelUtkarsh/opencode-ralph-loop-v2
 Either form adds the plugin to `~/.config/opencode/opencode.json` and
 installs it. A tag stays fixed until you change it; the bare form pins to
 the current `main` commit and `opencode plugin update` moves it forward.
-Verify with `opencode plugin list`.
+Verify with `opencode plugin list`, then restart the TUI so the Indicator
+loads.
+
+To move to a newer release, remove the old pin and add the new one:
+
+```sh
+opencode plugin remove "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.0"
+opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.1"
+```
+
+Releases are listed at
+<https://github.com/PatelUtkarsh/opencode-ralph-loop-v2/releases>.
 
 Release-age filters: OpenCode installs plugin dependencies with the npm
 settings on your machine. If `~/.npmrc` has `min-release-age` (or
@@ -198,6 +209,26 @@ The root files `index.ts`, `tui.ts`, and `rpc.ts` are one-line re-exports
 of the modules under `src/`. They must stay. OpenCode resolves a local
 plugin directory by those names and ignores the `exports` map in
 `package.json` (ADR-0005).
+
+Two packaging rules that a Git install depends on. OpenCode copies the
+repo into its cache and transpiles `src/tui.tsx` there, so `@opentui/core`,
+`@opentui/solid`, and `solid-js` must stay regular `dependencies` (not
+peers), and `tsconfig.json` must stay in `package.json` `files` so Bun sees
+`jsxImportSource`. Without either, the TUI plugin fails with
+`Cannot find package 'react'`.
+
+### Releasing
+
+```sh
+# bump "version" in package.json, then:
+git commit -am "chore(release): Version X.Y.Z"
+git tag -a vX.Y.Z -m "vX.Y.Z"
+git push origin main vX.Y.Z
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."
+```
+
+Keep `LoopState.directory` optional with its back-fill so stored Loop
+state never forces a major version bump.
 
 ## Credits
 
