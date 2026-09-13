@@ -14,29 +14,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opencode/plugin": "2.0.2"
-  },
-  "peerDependencies": {
-    "@opentui/core": ">=0.5.8",
-    "@opentui/solid": ">=0.5.8",
-    "solid-js": ">=1.9.0"
-  },
-  "peerDependenciesMeta": {
-    "@opentui/core": {
-      "optional": true
-    },
-    "@opentui/solid": {
-      "optional": true
-    },
-    "solid-js": {
-      "optional": true
-    }
-  },
-  "devDependencies": {
+    "@opencode/plugin": "2.0.2",
     "@opentui/core": "^0.5.11",
     "@opentui/solid": "^0.5.11",
+    "solid-js": "^1.9.15"
+  },
+  "devDependencies": {
     "@types/bun": "^1.3.0",
-    "solid-js": "^1.9.15",
     "typescript": "^5.7.0"
   },
   "author": "Utkarsh Patel",
@@ -60,6 +44,7 @@
     "bun": ">=1.3.0"
   },
   "files": [
+    "tsconfig.json",
     "index.ts",
     "tui.ts",
     "rpc.ts",
