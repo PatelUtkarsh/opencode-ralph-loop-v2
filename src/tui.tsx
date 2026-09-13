@@ -124,6 +124,12 @@ export default Plugin.define({
   id: "ralph-loop.tui",
   setup(context) {
     const rpc = context.client.rpc(RalphRpc)
+    const debug = (message: string, data?: unknown) => {
+      try {
+        require("node:fs").appendFileSync("/tmp/ralph-tui-debug.log", `${new Date().toISOString()} ${message} ${data === undefined ? "" : JSON.stringify(data)}\n`)
+      } catch {}
+    }
+    debug("setup", { location: context.location, import: import.meta.url })
 
     // Memory storage, not durable storage: a Loop Status is only true for as
     // long as the server says so, and it survives a plugin hot reload but
@@ -240,6 +246,7 @@ export default Plugin.define({
     }
 
     const stopChanged = rpc.events.on("changed", (event) => {
+      debug("changed", event.data)
       const data = readChangedEvent(event.data)
       if (data === undefined) return
       // Before anything else: this event is now the freshest word on the
@@ -280,7 +287,9 @@ export default Plugin.define({
       })
       const status = () => {
         const sessionID = props.input.sessionID
-        return sessionID === undefined ? undefined : store.entries[sessionID]?.status
+        const value = sessionID === undefined ? undefined : store.entries[sessionID]?.status
+        debug("indicator.status", { sessionID, value })
+        return value
       }
       // `Show` renders nothing when the session has no Loop, which is exactly
       // the "footer stays quiet" requirement (spec.md user story 31).
@@ -289,7 +298,10 @@ export default Plugin.define({
 
     const removeSlot = context.ui.slot({
       append: "prompt.footer.status",
-      render: (input) => <Indicator input={input} />,
+      render: (input) => {
+        debug("slot.render", { sessionID: input.sessionID })
+        return <Indicator input={input} />
+      },
     })
 
     return () => {
