@@ -25,12 +25,17 @@ TUI shows an Indicator under the prompt while the Loop runs.
 ### From GitHub (recommended)
 
 ```sh
+# Pinned to a release (recommended)
+opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.0"
+
+# Follow main
 opencode plugin add github:PatelUtkarsh/opencode-ralph-loop-v2
 ```
 
-This adds the plugin to `~/.config/opencode/opencode.json`, installs it,
-and pins it to the current `main` commit. `opencode plugin update` moves the
-pin forward. Verify with `opencode plugin list`.
+Either form adds the plugin to `~/.config/opencode/opencode.json` and
+installs it. A tag stays fixed until you change it; the bare form pins to
+the current `main` commit and `opencode plugin update` moves it forward.
+Verify with `opencode plugin list`.
 
 Release-age filters: OpenCode installs plugin dependencies with the npm
 settings on your machine. If `~/.npmrc` has `min-release-age` (or
