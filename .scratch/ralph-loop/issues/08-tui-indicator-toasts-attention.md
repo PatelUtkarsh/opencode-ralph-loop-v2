@@ -107,3 +107,8 @@ A review of the feature commit raised three warnings, all fixed in
 - A malformed `status` field was treated as no Loop, clearing a live
   Indicator. A malformed response or event is now ignored whole and logged
   once behind a guard.
+
+### TUI checklist run by the user (2026-09-13)
+
+- Steps 2 to 5 run in this repo's TUI before ticket 10 landed. Footer showed `ralph 0/2`; "Ralph Loop started" and "stopped: completed" toasts appeared. A second run exposed the ticket 10 duplicate-instance bug (three instances, two Continuation Prompts back to back, Max Iterations stop with zero deltas); fixed in `75238c4`.
+- Steps 6 to 9 (attention when blurred, paused, cancel toast, `notify: false`) not yet run under the fixed code. Remaining after `opencode service restart`.
