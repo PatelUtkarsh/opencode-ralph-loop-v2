@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import Plugin from "../src/index.ts"
 import { loopStorageKey, type LoopState } from "../src/state.ts"
-import { createFakeContext } from "./fake-context.ts"
+import { createFakeContext, FAKE_DIRECTORY } from "./fake-context.ts"
 
 const SESSION_ID = "ses_ralph"
 
 function baseState(overrides: Partial<LoopState> = {}): LoopState {
   return {
     sessionID: SESSION_ID,
+    directory: FAKE_DIRECTORY,
     task: "Build the API",
     promise: "DONE",
     iteration: 2,

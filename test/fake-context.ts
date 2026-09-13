@@ -96,6 +96,11 @@ export interface FakeContext {
   setRpcEmit(handler: (name: string, data: Record<string, unknown>) => Promise<void>): void
 }
 
+/** The `ctx.location.directory` a fake uses when the `location` seed is
+ * omitted. Exported so a test's `LoopState` fixture can claim ownership for
+ * the default fake without repeating the string (ADR-0006). */
+export const FAKE_DIRECTORY = "/tmp/ralph-loop-fake"
+
 interface PendingPull {
   resolve: (result: IteratorResult<FakeEvent>) => void
 }
@@ -172,6 +177,15 @@ export interface FakeContextOptions {
   /** Seeds the result `ctx.permission.list` returns; falls back to an empty array
    * (no pending permission). */
   readonly permissionListResult?: readonly unknown[]
+  /** Seeds `ctx.location`, i.e. the directory this plugin instance is loaded
+   * for; falls back to `/tmp/ralph-loop-fake`. Two fakes with different
+   * directories model the two plugin instances OpenCode runs when the plugin
+   * is loaded from two locations (ADR-0006). */
+  readonly location?: { readonly directory: string }
+  /** Seeds the `Map` backing `ctx.storage`, so two fakes can be given the
+   * same instance and share one storage backend, as the real plugin
+   * instances do (ADR-0006). Falls back to a fresh empty `Map`. */
+  readonly storage?: Map<string, unknown>
 }
 
 /** Builds a fake plugin `Context` double. See module doc for the casting note. */
@@ -190,8 +204,9 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
   }
   const commands = new Map<string, FakeCommandDefinition>()
   const rpcRegistrations: FakeRpcRegistration[] = []
-  const storage = new Map<string, unknown>()
+  const storage = options?.storage ?? new Map<string, unknown>()
   const events = createEventSource()
+  const directory = options?.location?.directory ?? FAKE_DIRECTORY
 
   const editor: FakeCommandEditor = {
     add(definition) {
@@ -207,7 +222,7 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
 
   const raw = {
     app: { name: "opencode", version: "2.0.2", channel: "stable" },
-    location: { directory: "/tmp/ralph-loop-fake", project: { id: "fake-project", directory: "/tmp/ralph-loop-fake", canonical: "/tmp/ralph-loop-fake" } },
+    location: { directory, project: { id: "fake-project", directory, canonical: directory } },
     options: options?.options ?? {},
     command: {
       transform: async (callback: (input: FakeCommandEditor) => void) => {

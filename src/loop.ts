@@ -9,7 +9,7 @@ import type { Plugin } from "@opencode/plugin"
 import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
 import type { StopReason } from "./rpc.ts"
 import { emitChanged } from "./status.ts"
-import { readLoopState, removeLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
+import { readOwnedLoopState, removeLoopState, writeLoopState, type LoopState, type LoopTokenUsage } from "./state.ts"
 
 type Context = Plugin.Context
 
@@ -268,9 +268,14 @@ export async function stopLoop(context: Context, sessionID: string, state: LoopS
  * (ADR-0002), continues the Loop with the next Continuation Prompt, or stops
  * it (completed / max iterations). No re-entrancy guard of its own; call it
  * through `handleTurnEnd` from `subscribeToTurnEnd`.
+ *
+ * Reads through `readOwnedLoopState`, so a Turn End for a Loop owned by
+ * another plugin instance is a no-op here (ADR-0006). Every loaded location
+ * runs its own instance and receives the same event, so without this each
+ * one would increment the Iteration and send its own Continuation Prompt.
  */
 export async function runTurnEnd(context: Context, sessionID: string): Promise<void> {
-  const state = await readLoopState(context, sessionID)
+  const state = await readOwnedLoopState(context, sessionID)
   if (state === undefined) return
 
   const messages = await fetchMessages(context, sessionID)
@@ -280,7 +285,7 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
     if (state.paused) return
     // Same race as below: a stop may have removed the Loop while we awaited
     // fetchMessages or permission.list. Do not resurrect it as a paused zombie.
-    const stillActive = await readLoopState(context, sessionID)
+    const stillActive = await readOwnedLoopState(context, sessionID)
     if (stillActive === undefined) return
     const pausedState = { ...stillActive, paused: true }
     await writeLoopState(context, pausedState)
@@ -303,7 +308,7 @@ export async function runTurnEnd(context: Context, sessionID: string): Promise<v
   // before writing so a concurrent stop is not resurrected by this
   // write, and no Continuation Prompt is sent for a Loop that no
   // longer exists.
-  const stillActive = await readLoopState(context, sessionID)
+  const stillActive = await readOwnedLoopState(context, sessionID)
   if (stillActive === undefined) return
 
   const nextIteration = stillActive.iteration + 1
@@ -368,7 +373,7 @@ export function subscribeToTurnEnd(
    * Notice: the transcript it would go to no longer exists. */
   async function handleSessionDeleted(sessionID: string): Promise<void> {
     try {
-      const state = await readLoopState(context, sessionID)
+      const state = await readOwnedLoopState(context, sessionID)
       if (state === undefined) return
       await removeLoopState(context, sessionID)
       pendingInbox.delete(sessionID)
@@ -382,7 +387,7 @@ export function subscribeToTurnEnd(
    * with no Loop in storage. Swallows rejections like `handleTurnEnd`. */
   async function handleStopEvent(sessionID: string, reason: "interrupted" | "failed"): Promise<void> {
     try {
-      const state = await readLoopState(context, sessionID)
+      const state = await readOwnedLoopState(context, sessionID)
       if (state === undefined) return
       await stopLoop(context, sessionID, state, reason)
     } catch (error) {

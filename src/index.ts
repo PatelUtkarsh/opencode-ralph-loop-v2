@@ -3,7 +3,7 @@ import { createCancelLoopCommand, createStartLoopCommand, createStatusCommand } 
 import { subscribeToTurnEnd } from "./loop.ts"
 import { RalphRpc } from "./rpc.ts"
 import { resumeLoops } from "./resume.ts"
-import { readLoopState } from "./state.ts"
+import { readOwnedLoopState } from "./state.ts"
 import { setStatusEmitter, toLoopStatus } from "./status.ts"
 
 const DEFAULT_MAX_ITERATIONS = 100
@@ -42,8 +42,15 @@ export default Plugin.define({
           return call.error("invalid_input", "status requires a string sessionID", { received: typeof input })
         }
         const { sessionID } = input
-        const state = await readLoopState(context, sessionID)
-        return { status: state === undefined ? undefined : toLoopStatus(state), notify }
+        // Ownership-aware (ADR-0006): each loaded location registers its own
+        // RPC, and a client asking this one only wants the Loops it owns.
+        const state = await readOwnedLoopState(context, sessionID)
+        // Build the result conditionally. A present `status` key holding
+        // `undefined` serialises as JSON `null`, which the output schema
+        // rejects, and the call fails with HTTP 500 (ticket 09's live
+        // checklist, item 6). The key must be absent when there is no Loop.
+        if (state === undefined) return { notify }
+        return { status: toLoopStatus(state), notify }
       },
     })
     const disposeStatusEmitter = setStatusEmitter((data) => rpcRegistration.events.emit("changed", data))

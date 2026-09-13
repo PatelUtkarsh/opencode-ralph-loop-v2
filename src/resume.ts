@@ -2,6 +2,7 @@
 // service restart when their Loop Session still exists. See spec.md
 // "Resume" and CONTEXT.md's "Resume" glossary entry.
 import type { Plugin } from "@opencode/plugin"
+import { ownsLoop } from "./state.ts"
 
 type Context = Plugin.Context
 
@@ -64,7 +65,11 @@ function isSessionIdle(info: unknown): boolean {
  * to each one whose Loop Session still exists: idle sessions are handled as
  * a Turn End via `onTurnEnd`, busy sessions are left for their next live
  * Turn End event, and Loops whose session no longer exists are discarded.
- * Call once from `setup`, after the Turn End subscription has started.
+ * Storage is shared by every plugin instance, so a Loop owned by another
+ * instance's directory is skipped outright (ADR-0006): it is neither
+ * re-prompted nor reaped, since only its owner can judge whether its Loop
+ * Session still exists. Call once from `setup`, after the Turn End
+ * subscription has started.
  * Never throws: every per-entry error is caught and logged with a
  * `[ralph-loop]` prefix so one bad entry cannot stop Resume for the rest.
  */
@@ -82,6 +87,10 @@ export async function resumeLoops(context: Context, onTurnEnd: (sessionID: strin
 
     for (const entry of page.entries) {
       const sessionID = entry.key.slice(LOOP_STORAGE_PREFIX.length)
+      // Ownership check on the scanned value, before any `session.get`
+      // call: a Loop belonging to another loaded location is none of this
+      // instance's business (ADR-0006).
+      if (!ownsLoop(entry.value, context.location.directory)) continue
       try {
         let info: unknown
         try {

@@ -11,7 +11,7 @@ import {
 } from "./prompts.ts"
 import { isSessionCostInfo, stopLoop } from "./loop.ts"
 import { emitChanged } from "./status.ts"
-import { readLoopState, writeLoopState, type LoopState } from "./state.ts"
+import { readLoopState, readOwnedLoopState, writeLoopState, type LoopState } from "./state.ts"
 
 type Context = Plugin.Context
 
@@ -25,7 +25,11 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
   return async function execute(input: RalphCommandInput): Promise<void> {
     const { sessionID, prompt, delivery } = input
 
-    const existing = await readLoopState(context, sessionID)
+    // Ownership-aware (ADR-0006): a Loop recorded against another directory
+    // is not visible here, so this start claims the key. That is the
+    // deliberate recovery path for a Loop whose owning instance is gone,
+    // e.g. after the Loop Session moved to another project.
+    const existing = await readOwnedLoopState(context, sessionID)
     if (existing !== undefined) {
       await context.session.synthetic({ sessionID, text: buildAlreadyActiveNotice() })
       return
@@ -44,6 +48,7 @@ export function createStartLoopCommand(context: Context, defaults: LoopArgDefaul
 
     const state: LoopState = {
       sessionID,
+      directory: context.location.directory,
       task,
       promise,
       iteration: 0,
@@ -75,7 +80,7 @@ export function createCancelLoopCommand(context: Context) {
   return async function execute(input: RalphCommandInput): Promise<void> {
     const { sessionID } = input
 
-    const state = await readLoopState(context, sessionID)
+    const state = await readOwnedLoopState(context, sessionID)
     if (state === undefined) {
       await context.session.synthetic({ sessionID, text: buildNoActiveLoopNotice() })
       return
@@ -92,7 +97,7 @@ export function createStatusCommand(context: Context) {
   return async function execute(input: RalphCommandInput): Promise<void> {
     const { sessionID } = input
 
-    const state = await readLoopState(context, sessionID)
+    const state = await readOwnedLoopState(context, sessionID)
     if (state === undefined) {
       await context.session.synthetic({ sessionID, text: buildNoActiveLoopNotice() })
       return

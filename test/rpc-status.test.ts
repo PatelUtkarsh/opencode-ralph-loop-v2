@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test"
 import Plugin from "../src/index.ts"
 import { RalphRpc } from "../src/rpc.ts"
 import { loopStorageKey, type LoopState } from "../src/state.ts"
-import { createFakeContext } from "./fake-context.ts"
+import { createFakeContext, FAKE_DIRECTORY } from "./fake-context.ts"
 
 const SESSION_ID = "ses_ralph"
 const NO_OP_SIGNAL = new AbortController().signal
@@ -22,6 +22,7 @@ function rpcCallContext() {
 function baseState(overrides: Partial<LoopState> = {}): LoopState {
   return {
     sessionID: SESSION_ID,
+    directory: FAKE_DIRECTORY,
     task: "Build the API",
     promise: "DONE",
     iteration: 1,
@@ -63,7 +64,7 @@ describe("RPC status method", () => {
     if (typeof cleanup === "function") await cleanup()
   })
 
-  test("returns status: undefined for a session with no Loop", async () => {
+  test("omits the status key entirely for a session with no Loop", async () => {
     const fake = createFakeContext()
 
     const cleanup = await Plugin.setup(fake.context)
@@ -72,7 +73,11 @@ describe("RPC status method", () => {
 
     const result = await registration.handlers["status"]?.({ sessionID: SESSION_ID }, rpcCallContext())
 
-    expect(result).toEqual({ status: undefined, notify: true })
+    // A present `status` key holding `undefined` serialises as JSON `null`,
+    // which the output schema rejects with an HTTP 500 (ticket 09's live
+    // checklist, item 6). The key has to be absent, not undefined.
+    expect(Object.keys(result as object)).toEqual(["notify"])
+    expect(result).toEqual({ notify: true })
 
     if (typeof cleanup === "function") await cleanup()
   })
@@ -86,7 +91,7 @@ describe("RPC status method", () => {
 
     const result = await registration.handlers["status"]?.({ sessionID: SESSION_ID }, rpcCallContext())
 
-    expect(result).toEqual({ status: undefined, notify: false })
+    expect(result).toEqual({ notify: false })
 
     if (typeof cleanup === "function") await cleanup()
   })
