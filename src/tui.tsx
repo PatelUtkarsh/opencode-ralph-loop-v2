@@ -1,3 +1,8 @@
+/** @jsxImportSource @opentui/solid */
+// The pragma above is load-bearing. Bun reads tsconfig.json relative to the
+// process cwd, not this file, so when OpenCode loads this plugin from its
+// npm cache the tsconfig's jsxImportSource is not seen and JSX falls back to
+// React. The per-file pragma applies everywhere.
 // The TUI plugin: the Indicator under the prompt, plus the start/stop toasts
 // and the attention notification (spec.md "TUI plugin", CONTEXT.md
 // "Indicator").
