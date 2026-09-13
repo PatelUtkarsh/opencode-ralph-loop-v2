@@ -1,1 +1,1 @@
-export { default } from "./src/tui.ts"
+export { default } from "./src/tui.tsx"
