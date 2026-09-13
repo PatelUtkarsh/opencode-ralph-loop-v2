@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 (RPC Loop Status contract and change events)
 
-**Status:** done
+**Status:** blocked-on-09
 
 - [x] `./tui` export: `Plugin.define({ id: "ralph-loop.tui" })` from `@opencode/plugin/tui`
 - [x] RPC subclient from `context.client.rpc(RalphRpc)`; memory store of `sessionID -> LoopStatus | undefined`
@@ -12,7 +12,7 @@
 - [x] Slot `append: "prompt.footer.status"` renders the Indicator text or nothing
 - [x] Toasts on start and stop; attention on `completed` and `max-iterations` with `when: "blurred"`
 - [x] Gated by `notify` from the `status` response
-- [x] Manual verification in the TUI (no automated tests); record the steps taken in the ticket comments
+- [ ] Manual verification in the TUI (no automated tests); record the steps taken in the ticket comments
 
 ## Comments
 
@@ -86,3 +86,24 @@ these from a real terminal in this repo:
 The manual checklist above overlaps ticket 09's. Ticket 09 should run it
 rather than write a second one, and should also settle the Resume idle vs
 busy heuristic that is still marked unverified in the architecture skill.
+
+The code is complete, but the manual checklist is still unrun, so this
+ticket stays open at `blocked-on-09`: ticket 09 runs the recorded checklist
+and closes it.
+
+### Review fixes (commit 25a48a9)
+
+A review of the feature commit raised three warnings, all fixed in
+`src/tui.tsx` with no test changes:
+
+- A slow `status` call could resolve after a newer `changed` event and
+  overwrite it. Each session now carries a revision counter that the
+  `changed` handler bumps; `refresh` captures it before its await and
+  discards its answer if it moved.
+- A failed seed left the session stuck, with no retry and no store entry to
+  compare a later `changed` event against. The failure path now drops the
+  session from the seeded set and writes a `pending` placeholder entry,
+  which a later `status` treats as "never seeded".
+- A malformed `status` field was treated as no Loop, clearing a live
+  Indicator. A malformed response or event is now ignored whole and logged
+  once behind a guard.
