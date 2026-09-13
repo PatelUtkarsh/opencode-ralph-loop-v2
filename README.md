@@ -1,5 +1,10 @@
 # opencode-ralph-loop-v2
 
+> **OpenCode V2 only.** This plugin uses the `@opencode/plugin` V2 API and
+> does not load on OpenCode 1.x. For V1, use
+> [`charfeng1/opencode-ralph-loop`](https://github.com/charfeng1/opencode-ralph-loop).
+> Tested against OpenCode 2.0.2.
+
 An OpenCode V2 plugin that keeps one session working on a Task until the
 agent says the work is done. You start a Loop with `/ralph-loop <task>`.
 At every Turn End the plugin looks in the transcript for the Completion
@@ -10,11 +15,24 @@ word. The Loop stops on a Completion Promise, at Max Iterations, on
 Session is deleted. Each stop posts a Notice to the transcript, and the
 TUI shows an Indicator under the prompt while the Loop runs.
 
+## Requirements
+
+- OpenCode **2.0.0 or later** (`opencode --version`). V1 is not supported.
+- [Bun](https://bun.sh) 1.3 or later, for `bun install` and the test suite.
+
 ## Install
 
-The plugin is not published yet. Load it from a local path. Add the plugin
-directory to the `plugins` array of an `opencode.json` or `opencode.jsonc`,
-in the project or in `~/.config/opencode/`:
+The plugin is not published to npm yet. Clone the repo and load it from a
+local path:
+
+```sh
+git clone https://github.com/PatelUtkarsh/opencode-ralph-loop-v2.git
+cd opencode-ralph-loop-v2
+bun install --minimum-release-age=0
+```
+
+Then add the plugin directory to the `plugins` array of an `opencode.json`
+or `opencode.jsonc`, in the project or in `~/.config/opencode/`:
 
 ```jsonc
 {
@@ -31,15 +49,13 @@ package name and the load fails. Write `"./"` with the trailing slash, or
 give the absolute path (ADR-0005).
 
 If your global config still uses the V1 `plugin` key, append the path to
-that same array. Do not add a second `plugins` key next to it.
+that same array. Do not add a second `plugins` key next to it. A global
+config change takes effect after `opencode service restart`.
 
-For contributors: this repo pins `@opencode/plugin` to the installed
-OpenCode version. If your `bunfig.toml` sets `minimumReleaseAge`, a plain
-`bun install` refuses a package that new. Use:
-
-```sh
-bun install --minimum-release-age=0
-```
+About `--minimum-release-age=0`: this repo pins `@opencode/plugin` to the
+installed OpenCode version. If your `bunfig.toml` sets `minimumReleaseAge`,
+a plain `bun install` refuses a package that new. The flag overrides it for
+one install.
 
 ## Commands
 

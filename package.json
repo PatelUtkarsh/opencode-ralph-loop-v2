@@ -38,5 +38,33 @@
     "@types/bun": "^1.3.0",
     "solid-js": "^1.9.15",
     "typescript": "^5.7.0"
-  }
+  },
+  "author": "Utkarsh Patel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PatelUtkarsh/opencode-ralph-loop-v2"
+  },
+  "homepage": "https://github.com/PatelUtkarsh/opencode-ralph-loop-v2#readme",
+  "bugs": {
+    "url": "https://github.com/PatelUtkarsh/opencode-ralph-loop-v2/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "opencode-v2",
+    "ralph-loop",
+    "ralph-wiggum",
+    "auto-continue"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "files": [
+    "index.ts",
+    "tui.ts",
+    "rpc.ts",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ]
 }
