@@ -26,7 +26,7 @@ TUI shows an Indicator under the prompt while the Loop runs.
 
 ```sh
 # Pinned to a release (recommended)
-opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.2"
+opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.5"
 
 # Follow main
 opencode plugin add github:PatelUtkarsh/opencode-ralph-loop-v2
