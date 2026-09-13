@@ -4,13 +4,13 @@
 
 **Blocked by:** 05 (`/cancel-ralph`, `/ralph-status`, and the remaining Stop Reasons), 06 (Resume Loops after a service restart), 08 (TUI Indicator, toasts, and attention notifications)
 
-**Status:** blocked-on-user
+**Status:** done
 
 - [x] README: what it does, install by absolute path, options (`maxIterations`, `promise`, `stopOnFailure`, `notify`), commands, Completion Promise rules, `--minimum-release-age=0` note, credits
 - [x] Manual checklist executed and results recorded under `## Comments`: plugin list shows both ids active; `--max 3` loop hits Max Iterations; promise loop completes with cost delta; `/cancel-ralph`; Esc; permission pause shows `paused`; `opencode service restart` mid-loop resumes
 - [x] Plugin added to the user's global `opencode.json` `plugin`/`plugins` array by absolute path
 - [x] `~/.config/opencode/skills/ralph-loop`, `cancel-ralph`, `help` removed (2026-09-13, confirmed by user; skill loader no longer lists them)
-- [ ] `.scratch/ralph-loop/spec.md` status left unchanged; this ticket marked done
+- [x] `.scratch/ralph-loop/spec.md` status left unchanged; this ticket marked done
 
 ## Comments
 

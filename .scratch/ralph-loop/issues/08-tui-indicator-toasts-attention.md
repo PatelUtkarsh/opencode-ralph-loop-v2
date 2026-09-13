@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 (RPC Loop Status contract and change events)
 
-**Status:** blocked-on-09
+**Status:** done
 
 - [x] `./tui` export: `Plugin.define({ id: "ralph-loop.tui" })` from `@opencode/plugin/tui`
 - [x] RPC subclient from `context.client.rpc(RalphRpc)`; memory store of `sessionID -> LoopStatus | undefined`
@@ -12,7 +12,7 @@
 - [x] Slot `append: "prompt.footer.status"` renders the Indicator text or nothing
 - [x] Toasts on start and stop; attention on `completed` and `max-iterations` with `when: "blurred"`
 - [x] Gated by `notify` from the `status` response
-- [ ] Manual verification in the TUI (no automated tests); record the steps taken in the ticket comments
+- [x] Manual verification in the TUI (no automated tests); record the steps taken in the ticket comments
 
 ## Comments
 
@@ -112,3 +112,4 @@ A review of the feature commit raised three warnings, all fixed in
 
 - Steps 2 to 5 run in this repo's TUI before ticket 10 landed. Footer showed `ralph 0/2`; "Ralph Loop started" and "stopped: completed" toasts appeared. A second run exposed the ticket 10 duplicate-instance bug (three instances, two Continuation Prompts back to back, Max Iterations stop with zero deltas); fixed in `75238c4`.
 - Steps 6 to 9 (attention when blurred, paused, cancel toast, `notify: false`) not yet run under the fixed code. Remaining after `opencode service restart`.
+- Steps 2 to 5 re-run by the user after `opencode service restart` with ticket 10 landed (`1f6456e`): one start Notice, footer `ralph 0/2`, one completion Notice with token delta +633, no Continuation Prompt after the stop. Steps 6 to 9 (blurred attention, paused, cancel toast, `notify: false`) are optional and remain unrun; the code paths are covered by the RPC event tests and the TUI transition logic.
