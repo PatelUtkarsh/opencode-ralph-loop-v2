@@ -9,7 +9,7 @@
 // manual TUI checklist instead.
 import { Plugin } from "@opencode/plugin/tui"
 import type { SlotMap } from "@opencode/plugin/tui/context"
-import { createEffect, Show } from "solid-js"
+import { createEffect, onCleanup, Show } from "solid-js"
 import { RalphRpc, type LoopStatus, type StopReason } from "./rpc.ts"
 
 /** What the TUI knows about one session. `status` absent means the session has
@@ -19,6 +19,12 @@ import { RalphRpc, type LoopStatus, type StopReason } from "./rpc.ts"
 interface SessionEntry {
   readonly status?: LoopStatus
   readonly notify: boolean
+  /** True while this entry is only a placeholder, written after a `status`
+   * call failed. The TUI does not yet know whether the session has a Loop, so
+   * a later `status` that fills it in is not a transition to announce, but a
+   * `changed` event arriving first still has a previous entry to compare
+   * against and can raise its toast. */
+  readonly pending?: true
 }
 
 interface IndicatorStore {
@@ -46,13 +52,15 @@ function isLoopStatus(value: unknown): value is LoopStatus {
 }
 
 /** Narrows a `status` response. The RPC contract uses JSON Schema, so the
- * client hands back `unknown`; a declared `invalid_input` failure also arrives
- * through this path and fails the check, which the caller treats as "no
- * status" (ticket 08). */
+ * client hands back `unknown` and this side has to check it. A declared
+ * `invalid_input` failure does not arrive here: the promise client rejects on
+ * a declared error, so `refresh`'s `catch` handles that case. */
 function isStatusResponse(value: unknown): value is { status?: LoopStatus; notify: boolean } {
   if (!isRecord(value)) return false
   if (typeof value["notify"] !== "boolean") return false
   const status = value["status"]
+  // A `status` this client cannot read is not the same as no Loop, so the
+  // whole response fails the check and the caller ignores it.
   return status === undefined || isLoopStatus(status)
 }
 
@@ -67,17 +75,35 @@ function isStopReason(value: unknown): value is StopReason {
   )
 }
 
+/** One-shot guard for the malformed-payload log. A server that emits a shape
+ * this client cannot read will emit it on every Loop change, and the TUI must
+ * not spill a log line into the terminal on each one. */
+let warnedMalformed = false
+
+function warnMalformed(what: string, value: unknown): void {
+  if (warnedMalformed) return
+  warnedMalformed = true
+  console.error(`[ralph-loop.tui] ignoring malformed ${what}; further ones are not logged`, value)
+}
+
 /** Narrows a `changed` event payload. Event data is a plain record at the
- * TypeScript boundary for the same JSON Schema reason as above. */
+ * TypeScript boundary for the same JSON Schema reason as above. Returns
+ * `undefined` for anything unreadable, including a `status` key this client
+ * cannot parse: a status it cannot read is not the same as no Loop, so the
+ * caller ignores the event rather than clearing the Indicator. */
 function readChangedEvent(data: unknown): { sessionID: string; status?: LoopStatus; reason?: StopReason } | undefined {
   if (!isRecord(data)) return undefined
   const sessionID = data["sessionID"]
   if (typeof sessionID !== "string") return undefined
   const status = data["status"]
+  if (status !== undefined && !isLoopStatus(status)) {
+    warnMalformed("changed event", data)
+    return undefined
+  }
   const reason = data["reason"]
   return {
     sessionID,
-    ...(isLoopStatus(status) ? { status } : {}),
+    ...(status === undefined ? {} : { status }),
     ...(isStopReason(reason) ? { reason } : {}),
   }
 }
@@ -110,6 +136,15 @@ export default Plugin.define({
     // The Stop Reason from the `changed` event that produced a session's
     // current entry, so the stop toast can name it.
     const lastReason = new Map<string, StopReason>()
+
+    // Bumped for a session on every `changed` event. A `status` call captures
+    // it before its await and discards its own answer if it moved, so a slow
+    // seed cannot overwrite a newer event with a stale Loop Status.
+    const revision = new Map<string, number>()
+
+    function revisionOf(sessionID: string): number {
+      return revision.get(sessionID) ?? 0
+    }
 
     function entryFor(sessionID: string): SessionEntry | undefined {
       return store.entries[sessionID]
@@ -158,25 +193,43 @@ export default Plugin.define({
     }
 
     async function refresh(sessionID: string): Promise<void> {
+      // Captured before the await. Any `changed` event that lands while the
+      // call is in flight moves this, and that event is by definition newer
+      // than the answer being awaited.
+      const before = revisionOf(sessionID)
       let response: unknown
       try {
         response = await rpc.status({ sessionID })
       } catch (error: unknown) {
+        // Includes a declared `invalid_input` failure: the promise client
+        // rejects on those rather than resolving with them.
         console.error("[ralph-loop.tui] status call failed", error)
+        // Let a later render try again, and leave a placeholder entry behind
+        // so a `changed` event arriving before that retry still has a
+        // previous entry to compare against and can raise its toast.
+        seeded.delete(sessionID)
+        if (entryFor(sessionID) === undefined) putEntry(sessionID, { notify: true, pending: true })
         return
       }
+      if (revisionOf(sessionID) !== before) return
       if (!isStatusResponse(response)) {
-        // A declared `invalid_input` failure, or anything else this client
-        // does not recognise: treat the session as having no Loop rather
-        // than guessing.
-        putEntry(sessionID, { notify: entryFor(sessionID)?.notify ?? true })
+        // A shape this client cannot read. Ignore it rather than claim the
+        // session has no Loop, and let a later render retry.
+        warnMalformed("status response", response)
+        seeded.delete(sessionID)
         return
       }
-      const previous = entryFor(sessionID)
+      const existing = entryFor(sessionID)
+      // A placeholder from a failed seed counts as "never seeded" here: this
+      // response is that seed finally landing, not a Loop starting.
+      const previous = existing?.pending === true ? undefined : existing
       const next: SessionEntry = {
         ...(response.status === undefined ? {} : { status: response.status }),
         notify: response.notify,
       }
+      // A Loop that is over has no Stop Reason left to report, so a stale one
+      // cannot leak into a later stop toast for the same session.
+      if (response.status === undefined) lastReason.delete(sessionID)
       putEntry(sessionID, next)
       announceTransition(previous, sessionID, next)
     }
@@ -184,6 +237,9 @@ export default Plugin.define({
     const stopChanged = rpc.events.on("changed", (event) => {
       const data = readChangedEvent(event.data)
       if (data === undefined) return
+      // Before anything else: this event is now the freshest word on the
+      // session, so any `status` call still in flight for it must stand down.
+      revision.set(data.sessionID, revisionOf(data.sessionID) + 1)
       const previous = entryFor(data.sessionID)
       if (data.reason === undefined) lastReason.delete(data.sessionID)
       else lastReason.set(data.sessionID, data.reason)
@@ -211,6 +267,11 @@ export default Plugin.define({
         if (sessionID === undefined || seeded.has(sessionID)) return
         seeded.add(sessionID)
         void refresh(sessionID)
+      })
+      // Once the footer is gone there is no viewed session, so a Turn End
+      // must not re-seed the one this component last showed.
+      onCleanup(() => {
+        viewedSessionID = undefined
       })
       const status = () => {
         const sessionID = props.input.sessionID
