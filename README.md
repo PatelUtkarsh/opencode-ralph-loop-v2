@@ -22,8 +22,25 @@ TUI shows an Indicator under the prompt while the Loop runs.
 
 ## Install
 
-The plugin is not published to npm yet. Clone the repo and load it from a
-local path:
+### From GitHub (recommended)
+
+```sh
+opencode plugin add github:PatelUtkarsh/opencode-ralph-loop-v2
+```
+
+This adds the plugin to `~/.config/opencode/opencode.json`, installs it,
+and pins it to the current `main` commit. `opencode plugin update` moves the
+pin forward. Verify with `opencode plugin list`.
+
+Release-age filters: OpenCode installs plugin dependencies with the npm
+settings on your machine. If `~/.npmrc` has `min-release-age` (or
+`~/.bunfig.toml` has `minimumReleaseAge`) and `@opencode/plugin` was
+published more recently than that window, the install fails with
+`No matching version found for @opencode/plugin@2.0.2 with a date before
+...`. Comment the setting out, install, then restore it. The cached package
+keeps working afterwards.
+
+### From a local checkout (contributors)
 
 ```sh
 git clone https://github.com/PatelUtkarsh/opencode-ralph-loop-v2.git
@@ -32,7 +49,9 @@ bun install --minimum-release-age=0
 ```
 
 Then add the plugin directory to the `plugins` array of an `opencode.json`
-or `opencode.jsonc`, in the project or in `~/.config/opencode/`:
+or `opencode.jsonc`, in the project or in `~/.config/opencode/`. Do not
+load the same plugin from both a package and a local path in one location:
+OpenCode rejects the second as `Duplicate plugin ID: ralph-loop`.
 
 ```jsonc
 {
@@ -53,9 +72,8 @@ that same array. Do not add a second `plugins` key next to it. A global
 config change takes effect after `opencode service restart`.
 
 About `--minimum-release-age=0`: this repo pins `@opencode/plugin` to the
-installed OpenCode version. If your `bunfig.toml` sets `minimumReleaseAge`,
-a plain `bun install` refuses a package that new. The flag overrides it for
-one install.
+installed OpenCode version. The flag overrides a `minimumReleaseAge` in your
+`bunfig.toml` for one install.
 
 ## Commands
 
