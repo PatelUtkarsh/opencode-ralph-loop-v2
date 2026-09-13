@@ -1,8 +1,10 @@
 // Turn End handling and the Stop Reasons. Pauses a Loop on a Skipped Idle,
 // continues it with the next Continuation Prompt, or stops it (completed,
 // max-iterations, cancelled, interrupted, failed) with the matching Notice.
-// A deleted session drops its Loop state silently. See spec.md "Turn End detection", "On Turn End", and "Stop", and
-// ADR-0004 (session.execution.succeeded, never session.idle).
+// A deleted Loop Session drops its state and emits `changed` with reason
+// `deleted`, but posts no Notice. See spec.md "Turn End detection", "On Turn
+// End", and "Stop", and ADR-0004 (session.execution.succeeded, never
+// session.idle).
 import type { Plugin } from "@opencode/plugin"
 import { buildCompletionNotice, buildContinuationPrompt, buildMaxIterationsNotice, buildStoppedNotice } from "./prompts.ts"
 import type { StopReason } from "./rpc.ts"
@@ -232,14 +234,19 @@ async function computeDeltas(
  * with the subscription. */
 const pendingInbox = new Map<string, Set<string>>()
 
+/** The Stop Reasons `stopLoop` handles: every one except `deleted`, which
+ * has no transcript left to post a Notice to and is handled by
+ * `handleSessionDeleted` in `subscribeToTurnEnd` instead. */
+export type StoppableReason = Exclude<StopReason, "deleted">
+
 /**
- * Stops a Loop for any Stop Reason: removes state and posts a Notice.
- * `completed` and `max-iterations` report cost/token deltas; the rest
- * report only the Iteration reached. Exported so `src/commands.ts` can
- * stop a Loop from `cancel-ralph`. Emits RPC `changed` with `status:
- * undefined` and the Stop Reason (ADR-0003).
+ * Stops a Loop and posts its Notice: removes state, clears the session's
+ * inbox tracking, and emits RPC `changed` with `status: undefined` and the
+ * Stop Reason (ADR-0003). `completed` and `max-iterations` report
+ * cost/token deltas; the rest report only the Iteration reached. Exported
+ * so `src/commands.ts` can stop a Loop from `cancel-ralph`.
  */
-export async function stopLoop(context: Context, sessionID: string, state: LoopState, reason: StopReason): Promise<void> {
+export async function stopLoop(context: Context, sessionID: string, state: LoopState, reason: StoppableReason): Promise<void> {
   await removeLoopState(context, sessionID)
   pendingInbox.delete(sessionID)
   emitChanged(sessionID, undefined, reason)
@@ -354,6 +361,23 @@ export function subscribeToTurnEnd(
     }
   }
 
+  /** Drops a deleted session's Loop: reads state first so a session that
+   * never had a Loop costs no storage write and emits nothing, then removes
+   * state, clears its inbox tracking, and emits `changed` with reason
+   * `deleted` so a TUI Indicator watching that session clears too. Posts no
+   * Notice: the transcript it would go to no longer exists. */
+  async function handleSessionDeleted(sessionID: string): Promise<void> {
+    try {
+      const state = await readLoopState(context, sessionID)
+      if (state === undefined) return
+      await removeLoopState(context, sessionID)
+      pendingInbox.delete(sessionID)
+      emitChanged(sessionID, undefined, "deleted")
+    } catch (error) {
+      console.error(`[ralph-loop] removing state for deleted session ${sessionID} failed`, error)
+    }
+  }
+
   /** Stops a Loop Session for `interrupted` or `failed`, ignoring sessions
    * with no Loop in storage. Swallows rejections like `handleTurnEnd`. */
   async function handleStopEvent(sessionID: string, reason: "interrupted" | "failed"): Promise<void> {
@@ -396,10 +420,7 @@ export function subscribeToTurnEnd(
           if (stopOnFailure) void handleStopEvent(sessionID, "failed")
           else void handleTurnEnd(sessionID)
         } else if (event.type === SESSION_DELETED_EVENT_TYPE) {
-          pendingInbox.delete(sessionID)
-          removeLoopState(context, sessionID).catch((error: unknown) => {
-            console.error(`[ralph-loop] removing state for deleted session ${sessionID} failed`, error)
-          })
+          void handleSessionDeleted(sessionID)
         }
       }
     } catch (error) {

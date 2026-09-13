@@ -7,7 +7,7 @@ import { Rpc } from "@opencode/plugin/rpc"
 /** Why a Loop stopped (spec.md "Stop Reason"). Owned here rather than in
  * `src/loop.ts` so `loop.ts` can import `RalphRpc` (to emit `changed`)
  * without a circular import: `rpc.ts` never imports from `loop.ts`. */
-export type StopReason = "completed" | "max-iterations" | "cancelled" | "interrupted" | "failed"
+export type StopReason = "completed" | "max-iterations" | "cancelled" | "interrupted" | "failed" | "deleted"
 
 /** The read-only view of one Loop exposed over RPC (CONTEXT.md "Loop
  * Status"). Absent when the session has no Loop. */
@@ -28,20 +28,22 @@ const sessionIDInputSchema = {
 
 const loopStatusSchema = {
   type: "object",
+  // `satisfies` ties the schema's properties to `LoopStatus`, so adding a
+  // field to the interface without adding it here is a type error.
   properties: {
-    iteration: { type: "number" },
-    maxIterations: { type: "number" },
+    iteration: { type: "integer" },
+    maxIterations: { type: "integer" },
     paused: { type: "boolean" },
     task: { type: "string" },
     promise: { type: "string" },
-  },
+  } satisfies Record<keyof LoopStatus, unknown>,
   required: ["iteration", "maxIterations", "paused", "task", "promise"],
   additionalProperties: false,
 }
 
 const stopReasonSchema = {
   type: "string",
-  enum: ["completed", "max-iterations", "cancelled", "interrupted", "failed"],
+  enum: ["completed", "max-iterations", "cancelled", "interrupted", "failed", "deleted"] satisfies StopReason[],
 }
 
 /** The shared RPC definition (ADR-0003). One method, `status({ sessionID })
@@ -61,6 +63,17 @@ export const RalphRpc = Rpc.define({
         },
         required: ["notify"],
         additionalProperties: false,
+      },
+      // JSON Schema input is `unknown` at the TypeScript boundary, so the
+      // handler narrows it itself and reports a malformed call as this
+      // declared failure rather than throwing a TypeError at the caller.
+      errors: {
+        invalid_input: {
+          type: "object",
+          properties: { received: { type: "string" } },
+          required: ["received"],
+          additionalProperties: false,
+        },
       },
     },
   },

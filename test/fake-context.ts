@@ -35,9 +35,17 @@ export interface FakeCommandEditor {
   add(definition: FakeCommandDefinition): void
 }
 
+/** The second argument the RPC runtime passes to a method handler: a
+ * cancellation `signal` and the `error` factory for the errors the method
+ * declared in `Rpc.define`. */
+export interface FakeRpcCallContext {
+  readonly signal: AbortSignal
+  readonly error: (type: string, message: string, data?: unknown) => unknown
+}
+
 export interface FakeRpcRegistration {
   readonly definition: unknown
-  readonly handlers: Record<string, (input: unknown, context: { signal: AbortSignal }) => Promise<unknown>>
+  readonly handlers: Record<string, (input: unknown, context: FakeRpcCallContext) => Promise<unknown>>
 }
 
 export interface FakeContextCalls {
@@ -77,6 +85,15 @@ export interface FakeContext {
    * static `sessionGetResult` seed cannot express, e.g. throwing for one
    * sessionID (not found) while returning a busy/idle shape for others. */
   setSessionGet(handler: (input: Record<string, unknown>) => Promise<unknown>): void
+  /** Overrides `ctx.permission.list` for a test. Use this for behaviour the
+   * static `permissionListResult` seed cannot express, e.g. a pending
+   * permission that appears at one Turn End and clears by the next. */
+  setPermissionList(handler: (input: Record<string, unknown>) => Promise<unknown[]>): void
+  /** Overrides what an `rpc.register` result's `events.emit(name, data)`
+   * does after recording the call to `calls.rpcEmit`. Use this to make a
+   * `changed` emit fail, synchronously or by rejecting, and assert that the
+   * Loop survives it. */
+  setRpcEmit(handler: (name: string, data: Record<string, unknown>) => Promise<void>): void
 }
 
 interface PendingPull {
@@ -185,6 +202,8 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
   let sessionContextHandler = async (_input: Record<string, unknown>): Promise<unknown[]> => [...(options?.sessionContextResult ?? [])]
   let sessionGetHandler = async (input: Record<string, unknown>): Promise<unknown> =>
     options?.sessionGetResult ?? { id: input["sessionID"], cost: 0, tokens: { input: 0, output: 0 } }
+  let permissionListHandler = async (_input: Record<string, unknown>): Promise<unknown[]> => [...(options?.permissionListResult ?? [])]
+  let rpcEmitHandler = async (_name: string, _data: Record<string, unknown>): Promise<void> => {}
 
   const raw = {
     app: { name: "opencode", version: "2.0.2", channel: "stable" },
@@ -202,17 +221,18 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     permission: {
       list: async (input: Record<string, unknown>) => {
         calls.permissionList.push(input)
-        return [...(options?.permissionListResult ?? [])]
+        return permissionListHandler(input)
       },
     },
     rpc: {
-      register: async (definition: unknown, handlers: Record<string, (input: unknown, context: { signal: AbortSignal }) => Promise<unknown>>) => {
+      register: async (definition: unknown, handlers: Record<string, (input: unknown, context: FakeRpcCallContext) => Promise<unknown>>) => {
         rpcRegistrations.push({ definition, handlers })
         return {
           dispose: async () => {},
           events: {
             emit: async (name: string, data: Record<string, unknown>) => {
               calls.rpcEmit.push({ name, data })
+              return rpcEmitHandler(name, data)
             },
           },
         }
@@ -278,6 +298,12 @@ export function createFakeContext(options?: FakeContextOptions): FakeContext {
     },
     setSessionGet(handler) {
       sessionGetHandler = handler
+    },
+    setPermissionList(handler) {
+      permissionListHandler = handler
+    },
+    setRpcEmit(handler) {
+      rpcEmitHandler = handler
     },
   }
 }

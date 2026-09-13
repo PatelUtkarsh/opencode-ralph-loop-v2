@@ -86,11 +86,13 @@ export function buildMaxIterationsNotice(options: {
   ].join("\n")
 }
 
-/** The remaining Stop Reasons: cancelled, interrupted, failed. These report
- * the Iteration reached and no cost/token deltas (spec.md "Stop"). Derived
- * from `loop.ts`'s `StopReason` so the two Notice-shape groups (deltas vs.
- * no deltas) cannot drift apart. */
-export type StoppedReason = Exclude<StopReason, "completed" | "max-iterations">
+/** The Stop Reasons that get a plain Notice: cancelled, interrupted,
+ * failed. They report the Iteration reached and no cost/token deltas
+ * (spec.md "Stop"). Derived from `rpc.ts`'s `StopReason` so the Notice
+ * groups cannot drift from it: `completed` and `max-iterations` get their
+ * own delta-reporting builders, and `deleted` gets no Notice at all,
+ * because the transcript it would be posted to is gone. */
+export type StoppedReason = Exclude<StopReason, "completed" | "max-iterations" | "deleted">
 
 /** Notice posted when a Loop stops for `cancelled`, `interrupted`, or `failed`. */
 export function buildStoppedNotice(reason: StoppedReason, iteration: number): string {

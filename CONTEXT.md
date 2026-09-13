@@ -49,7 +49,7 @@ A synthetic message the plugin posts to the Loop Session so the user can see a L
 _Avoid_: Toast, log, status message
 
 **Stop Reason**:
-Why a Loop ended: completed, max iterations, cancelled, interrupted, failed, or session deleted.
+Why a Loop ended: completed, max-iterations, cancelled, interrupted, failed, or deleted (the Loop Session itself was removed).
 _Avoid_: Exit code, outcome
 
 **Hard Cap**:

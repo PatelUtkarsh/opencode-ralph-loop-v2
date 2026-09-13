@@ -11,6 +11,15 @@ const DEFAULT_PROMISE = "DONE"
 const DEFAULT_STOP_ON_FAILURE = true
 const DEFAULT_NOTIFY = true
 
+/** Narrows the `status` method's input. JSON Schema input arrives as
+ * `unknown` at the TypeScript boundary (see the RPC docs, "Input and
+ * output"), so a malformed call must be reported as the declared
+ * `invalid_input` error rather than crashing the handler on a cast. */
+function isStatusInput(value: unknown): value is { sessionID: string } {
+  if (typeof value !== "object" || value === null) return false
+  return typeof (value as Record<string, unknown>)["sessionID"] === "string"
+}
+
 export default Plugin.define({
   id: "ralph-loop",
   async setup(context) {
@@ -28,13 +37,16 @@ export default Plugin.define({
     // in src/status.ts, so those modules never need a reference to this
     // registration.
     const rpcRegistration = await context.rpc.register(RalphRpc, {
-      status: async (input) => {
-        const { sessionID } = input as { sessionID: string }
+      status: async (input, call) => {
+        if (!isStatusInput(input)) {
+          return call.error("invalid_input", "status requires a string sessionID", { received: typeof input })
+        }
+        const { sessionID } = input
         const state = await readLoopState(context, sessionID)
         return { status: state === undefined ? undefined : toLoopStatus(state), notify }
       },
     })
-    setStatusEmitter((data) => rpcRegistration.events.emit("changed", data))
+    const disposeStatusEmitter = setStatusEmitter((data) => rpcRegistration.events.emit("changed", data))
 
     await context.command.transform((editor) => {
       editor.add({
@@ -64,7 +76,7 @@ export default Plugin.define({
 
     return async () => {
       turnEndController.abort()
-      setStatusEmitter(undefined)
+      disposeStatusEmitter()
       await rpcRegistration.dispose()
     }
   },
