@@ -1,6 +1,6 @@
 {
   "name": "opencode-ralph-loop-v2",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Ralph Loop plugin for OpenCode V2. Auto-continues a session until the agent outputs a completion promise.",
   "license": "MIT",
   "type": "module",

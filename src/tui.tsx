@@ -14,7 +14,6 @@
 // manual TUI checklist instead.
 import { Plugin } from "@opencode/plugin/tui"
 import type { SlotMap } from "@opencode/plugin/tui/context"
-import { createEffect, onCleanup, Show } from "solid-js"
 import { RalphRpc, type LoopStatus, type StopReason } from "./rpc.ts"
 
 /** What the TUI knows about one session. `status` absent means the session has
@@ -265,31 +264,31 @@ export default Plugin.define({
       void refresh(sessionID)
     })
 
-    function Indicator(props: { readonly input: SlotMap["prompt.footer.status"] }) {
-      createEffect(() => {
-        const sessionID = props.input.sessionID
-        viewedSessionID = sessionID
-        if (sessionID === undefined || seeded.has(sessionID)) return
+    // The Indicator is a plain accessor, not a Solid component. The host's
+    // reconciler wraps a function child in its own render effect, so
+    // `store.entries[...]` is tracked through the host's Solid instance. This
+    // file deliberately imports nothing from `solid-js`: a plugin installed
+    // from Git gets its own `solid-js` copy under `node_modules` (a peer of
+    // `@opentui/solid`), and `createEffect` or `Show` from that copy would
+    // run on a second reactive graph that never sees the host's store writes.
+    // Seeding happens inside the accessor on the first read for a session.
+    function indicator(input: SlotMap["prompt.footer.status"]): string {
+      const sessionID = input.sessionID
+      viewedSessionID = sessionID
+      if (sessionID === undefined) return ""
+      if (!seeded.has(sessionID)) {
         seeded.add(sessionID)
         void refresh(sessionID)
-      })
-      // Once the footer is gone there is no viewed session, so a Turn End
-      // must not re-seed the one this component last showed.
-      onCleanup(() => {
-        viewedSessionID = undefined
-      })
-      const status = () => {
-        const sessionID = props.input.sessionID
-        return sessionID === undefined ? undefined : store.entries[sessionID]?.status
       }
-      // `Show` renders nothing when the session has no Loop, which is exactly
-      // the "footer stays quiet" requirement (spec.md user story 31).
-      return <Show when={status()}>{(current: () => LoopStatus) => <text>{indicatorText(current())}</text>}</Show>
+      const status = store.entries[sessionID]?.status
+      // An empty string renders nothing visible, which is the "footer stays
+      // quiet" requirement (spec.md user story 31).
+      return status === undefined ? "" : indicatorText(status)
     }
 
     const removeSlot = context.ui.slot({
       append: "prompt.footer.status",
-      render: (input) => <Indicator input={input} />,
+      render: (input) => <text>{() => indicator(input)}</text>,
     })
 
     return () => {

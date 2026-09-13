@@ -42,7 +42,7 @@ To move to a newer release, remove the old pin and add the new one:
 
 ```sh
 opencode plugin remove "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.1"
-opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.4"
+opencode plugin add "github:PatelUtkarsh/opencode-ralph-loop-v2#v1.0.5"
 ```
 
 Releases are listed at
@@ -215,12 +215,15 @@ must keep its first-line `/** @jsxImportSource @opentui/solid */` pragma:
 Bun reads `tsconfig.json` from the process cwd, not from the file, so the
 tsconfig setting is not seen when OpenCode loads the plugin from its cache,
 and without the pragma the TUI plugin fails with `Cannot find package
-'react'`. Second, `@opentui/core` and `@opentui/solid` must be regular
-dependencies (the TUI host does not supply them), but `solid-js` must stay
-a devDependency. The host renders with its own `solid-js`; a second copy
-inside the plugin's `node_modules` gives the Indicator a separate reactive
-graph, so the footer renders once and never updates. `@opentui/solid`
-declares `solid-js` as a peer, so it does not pull one in.
+'react'`. Second, `src/tui.tsx` must not import anything from `solid-js`.
+`@opentui/core` and `@opentui/solid` ship as dependencies because the TUI
+host does not supply them, and `@opentui/solid` lists `solid-js` as a
+peer, so a Git install always gets its own `solid-js` copy. Any
+`createEffect`, `Show`, or `onCleanup` taken from that copy runs on a
+second reactive graph and never sees the host's store writes; the footer
+then renders once and never updates. The Indicator is therefore a plain
+accessor passed as a function child (`<text>{() => text(input)}</text>`),
+which the host's reconciler tracks through its own Solid instance.
 
 ### Releasing
 
